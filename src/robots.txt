@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://COLOQUE-SEU-DOMINIO-AQUI/sitemap.xml
+Sitemap: https://docequerende.com.br/sitemap.xml
