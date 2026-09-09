@@ -6,6 +6,8 @@ import { DebtList, type DebtRow } from '@/components/DebtList';
 import { ExtraForm } from '@/components/ExtraForm';
 import { PayoffChart } from '@/components/PayoffChart';
 import { ExportPdfButton } from '@/components/ExportPdfButton';
+import { ImportSimulationBanner } from '@/components/ImportSimulationBanner';
+import { exampleDebts, exampleExtraMensal } from '@/lib/exampleDebts';
 
 const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -37,6 +39,14 @@ export default async function DashboardPage() {
 
   const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
 
+  const exemplo =
+    debts.length === 0
+      ? calcularDataVirada(
+          exampleDebts.map((d) => ({ id: d.id, nome: d.nome, saldo: d.saldo, taxaMensal: d.taxaMensal, minimo: d.minimo })),
+          exampleExtraMensal
+        )
+      : null;
+
   return (
     <div className="space-y-8">
       <div className="hidden print:block">
@@ -53,6 +63,26 @@ export default async function DashboardPage() {
         </div>
         {resultado && <ExportPdfButton />}
       </div>
+
+      <div className="print:hidden">
+        <ImportSimulationBanner />
+      </div>
+
+      {exemplo && (
+        <div className="print:hidden">
+          <div className="mb-2 inline-block rounded-full bg-gold/15 px-3 py-1 text-xs font-semibold text-gold">
+            EXEMPLO ILUSTRATIVO
+          </div>
+          <div className="card bg-gradient-to-br from-magenta to-magenta-dark text-white opacity-90">
+            <p className="font-script text-xl text-blush">com dívidas parecidas, a data da virada seria</p>
+            <h2 className="mt-1 text-3xl capitalize !text-white sm:text-4xl">{formatarMesAno(exemplo.dataVirada)}</h2>
+            <p className="mt-2 text-sm text-blush/90">
+              Exemplo com cheque especial + cartão rotativo e R$ {exampleExtraMensal} extra por mês. Adicione suas
+              dívidas reais abaixo para ver a sua.
+            </p>
+          </div>
+        </div>
+      )}
 
       {resultado && (
         <div className="card bg-gradient-to-br from-magenta to-magenta-dark text-white print:!bg-none print:!bg-white print:!text-magenta-dark print:ring-1 print:ring-magenta/30">
@@ -101,6 +131,7 @@ export default async function DashboardPage() {
       </div>
       <div className="print:hidden">
         <DebtForm />
+        <p className="mt-2 text-center text-xs text-neutral-500">🔒 Seus dados ficam privados, vinculados só à sua conta.</p>
       </div>
       <DebtList debts={debts} />
     </div>

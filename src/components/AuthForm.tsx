@@ -62,6 +62,9 @@ export function AuthForm({
         )}
 
         <SubmitButton label={mode === 'login' ? 'Entrar' : 'Criar conta grátis'} />
+        {mode === 'register' && (
+          <p className="text-center text-xs text-neutral-500">🔒 Seus dados ficam privados, vinculados só à sua conta.</p>
+        )}
       </form>
 
       <p className="mt-6 text-center text-sm text-neutral-600">

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth';
 import { redirect } from 'next/navigation';
+import { DebtSimulator } from '@/components/DebtSimulator';
 
 export default async function LandingPage() {
   const user = await getCurrentUser();
@@ -16,42 +17,21 @@ export default async function LandingPage() {
         </div>
       </nav>
 
-      <section className="mx-auto grid max-w-5xl gap-10 px-6 py-12 md:grid-cols-2 md:items-center md:py-20">
-        <div>
-          <p className="font-script text-2xl text-gold">não é falta de disciplina.</p>
-          <h1 className="mt-2 text-4xl font-black leading-tight sm:text-5xl">
-            Descubra sua <span className="text-gold">Data da Virada</span>
-          </h1>
-          <p className="mt-5 text-lg text-neutral-600">
-            Você paga em dia todo mês e mesmo assim a dívida não sai do lugar? O problema não é você —
-            é a <strong className="text-magenta-dark">ordem de pagamento</strong>. Monte sua Matriz de
-            Realocação de Pagamentos e veja, em segundos, o mês exato em que você fica livre do cartão
-            rotativo, cheque especial, CDC e financiamentos.
-          </p>
-          <div className="mt-8 flex flex-wrap gap-4">
-            <Link href="/register" className="btn-primary">Calcular minha Data da Virada</Link>
-            <Link href="/login" className="btn-secondary">Já tenho conta</Link>
-          </div>
-          <p className="mt-4 text-sm text-neutral-500">Grátis para criar sua conta e simular. Leva menos de 2 minutos.</p>
-        </div>
+      <section className="mx-auto max-w-3xl px-6 py-12 text-center md:py-16">
+        <p className="font-script text-2xl text-gold">não é falta de disciplina.</p>
+        <h1 className="mt-2 text-4xl font-black leading-tight sm:text-5xl">
+          Descubra sua <span className="text-gold">Data da Virada</span>
+        </h1>
+        <p className="mx-auto mt-5 max-w-2xl text-lg text-neutral-600">
+          Você paga em dia todo mês e mesmo assim a dívida não sai do lugar? O problema não é você —
+          é a <strong className="text-magenta-dark">ordem de pagamento</strong>. Mexa nos números abaixo
+          e veja, em segundos, o mês em que você ficaria livre do cartão rotativo, cheque especial, CDC
+          e financiamentos — sem precisar criar conta pra testar.
+        </p>
+      </section>
 
-        <div className="card">
-          <h2 className="text-lg">Como funciona</h2>
-          <ol className="mt-4 space-y-4">
-            <li className="flex gap-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-magenta font-heading font-bold text-white">1</span>
-              <span>Cadastre suas dívidas: saldo, juro mensal e pagamento mínimo.</span>
-            </li>
-            <li className="flex gap-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-magenta font-heading font-bold text-white">2</span>
-              <span>A Matriz reorganiza seus pagamentos, priorizando quem cobra mais caro.</span>
-            </li>
-            <li className="flex gap-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gold font-heading font-bold text-white">3</span>
-              <span>Você recebe sua <strong>Data da Virada</strong> — e o quanto ela antecipa sua liberdade.</span>
-            </li>
-          </ol>
-        </div>
+      <section className="mx-auto max-w-3xl px-6 pb-16">
+        <DebtSimulator persistKey="ddv_anon_debts" ctaHref="/register" />
       </section>
 
       <section className="mx-auto max-w-5xl px-6 pb-20">
