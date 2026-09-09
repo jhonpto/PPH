@@ -1,0 +1,71 @@
+# =============================================================
+#  Kit Cravejado Lucrativo — configuração Apache/LiteSpeed
+#  (Hostinger usa LiteSpeed, que lê este arquivo normalmente)
+# =============================================================
+
+# ---- Página inicial ----
+DirectoryIndex index.html
+
+# ---- Força HTTPS ----
+# ATENÇÃO: ative o SSL no hPanel (Segurança > SSL) ANTES de subir
+# este arquivo. Se o SSL ainda não estiver ativo, comente as 3
+# linhas abaixo (coloque # na frente) para o site não ficar fora do ar.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} off
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# ---- Compressão (gzip/brotli) ----
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml \
+    application/javascript application/json image/svg+xml \
+    application/xml application/rss+xml font/ttf font/otf application/vnd.ms-fontobject
+</IfModule>
+
+# ---- Cache do navegador ----
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresDefault                        "access plus 1 month"
+  ExpiresByType text/html               "access plus 0 seconds"
+  ExpiresByType text/css                "access plus 1 year"
+  ExpiresByType application/javascript  "access plus 1 year"
+  ExpiresByType image/webp              "access plus 1 year"
+  ExpiresByType image/png               "access plus 1 year"
+  ExpiresByType image/jpeg              "access plus 1 year"
+  ExpiresByType image/x-icon            "access plus 1 year"
+  ExpiresByType image/vnd.microsoft.icon "access plus 1 year"
+  ExpiresByType font/woff2              "access plus 1 year"
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(webp|png|jpe?g|gif|ico|svg|css|js|woff2?)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  <FilesMatch "\.html$">
+    Header set Cache-Control "public, max-age=0, must-revalidate"
+  </FilesMatch>
+  # Segurança básica
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set X-Frame-Options "SAMEORIGIN"
+</IfModule>
+
+# ---- Tipos MIME (garantia) ----
+<IfModule mod_mime.c>
+  AddType image/webp .webp
+  AddType image/x-icon .ico
+  AddType font/woff2 .woff2
+</IfModule>
+
+# ---- Página de erro ----
+# Site de página única (não é SPA). Qualquer URL inexistente cai no 404.
+ErrorDocument 404 /404.html
+
+# ---- Bloqueia acesso a arquivos de projeto (caso subam junto por engano) ----
+<FilesMatch "\.(env|md|mjs|lock|gitignore|zip)$">
+  Require all denied
+</FilesMatch>
+<Files ".env.example">
+  Require all denied
+</Files>

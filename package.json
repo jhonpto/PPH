@@ -1,0 +1,19 @@
+{
+  "name": "kit-cravejado-lucrativo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Landing page de vendas do Kit Cravejado Lucrativo — site 100% estático (HTML/CSS), sem backend.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "preview": "npm run build && serve dist -l 3000 --no-request-logging",
+    "start": "npm run preview",
+    "dev": "serve src -l 3000 --no-request-logging"
+  },
+  "devDependencies": {
+    "serve": "^14.2.4"
+  }
+}
