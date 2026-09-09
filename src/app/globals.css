@@ -28,3 +28,17 @@
     @apply mb-1.5 block font-body text-sm font-medium text-neutral-600;
   }
 }
+
+@media print {
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  body {
+    background: white !important;
+  }
+  .card {
+    @apply shadow-none ring-0;
+    break-inside: avoid;
+  }
+}

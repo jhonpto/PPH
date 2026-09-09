@@ -31,7 +31,7 @@ export function DebtList({ debts }: { debts: DebtRow[] }) {
             <th className="pb-2 font-medium">Saldo</th>
             <th className="pb-2 font-medium">Juro/mês</th>
             <th className="pb-2 font-medium">Mínimo</th>
-            <th className="pb-2"></th>
+            <th className="pb-2 print:hidden"></th>
           </tr>
         </thead>
         <tbody>
@@ -41,7 +41,7 @@ export function DebtList({ debts }: { debts: DebtRow[] }) {
               <td className="py-3">{brl(d.saldo)}</td>
               <td className="py-3">{d.taxa_mensal.toFixed(2)}%</td>
               <td className="py-3">{brl(d.minimo)}</td>
-              <td className="py-3 text-right">
+              <td className="py-3 text-right print:hidden">
                 <form action={deleteDebtAction}>
                   <input type="hidden" name="id" value={d.id} />
                   <button type="submit" className="text-neutral-400 hover:text-magenta" title="Remover">
