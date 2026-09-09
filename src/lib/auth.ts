@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { cookies } from 'next/headers';
-import { db } from './db';
+import { query } from './db';
 
 const SESSION_COOKIE = 'ddv_session';
 const SECRET = process.env.SESSION_SECRET || 'data-da-virada-dev-secret-change-me';
@@ -26,7 +26,12 @@ export function verifySessionToken(token: string | undefined): number | null {
   const [encoded, signature] = token.split('.');
   if (!encoded || !signature) return null;
   const expected = sign(encoded);
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  if (
+    signature.length !== expected.length ||
+    !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  ) {
+    return null;
+  }
   try {
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf-8'));
     if (typeof payload.uid !== 'number' || payload.exp < Date.now()) return null;
@@ -57,12 +62,14 @@ export interface CurrentUser {
   extra_mensal: number;
 }
 
-export function getCurrentUser(): CurrentUser | null {
+export async function getCurrentUser(): Promise<CurrentUser | null> {
   const token = cookies().get(SESSION_COOKIE)?.value;
   const uid = verifySessionToken(token);
   if (!uid) return null;
-  const user = db
-    .prepare('SELECT id, name, email, extra_mensal FROM users WHERE id = ?')
-    .get(uid) as CurrentUser | undefined;
-  return user ?? null;
+  const rows = await query<{ id: number; name: string; email: string; extra_mensal: string }>(
+    'SELECT id, name, email, extra_mensal FROM users WHERE id = $1',
+    [uid]
+  );
+  const user = rows[0];
+  return user ? { ...user, extra_mensal: Number(user.extra_mensal) } : null;
 }

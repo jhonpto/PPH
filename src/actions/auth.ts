@@ -2,7 +2,7 @@
 
 import bcrypt from 'bcryptjs';
 import { redirect } from 'next/navigation';
-import { db } from '@/lib/db';
+import { query } from '@/lib/db';
 import { setSessionCookie, clearSessionCookie } from '@/lib/auth';
 
 export interface AuthState {
@@ -21,17 +21,18 @@ export async function registerAction(_prevState: AuthState, formData: FormData):
     return { error: 'A senha precisa ter pelo menos 6 caracteres.' };
   }
 
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-  if (existing) {
+  const existing = await query('SELECT id FROM users WHERE email = $1', [email]);
+  if (existing.length > 0) {
     return { error: 'Já existe uma conta com esse e-mail. Faça login.' };
   }
 
   const passwordHash = bcrypt.hashSync(password, 10);
-  const result = db
-    .prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)')
-    .run(name, email, passwordHash);
+  const rows = await query<{ id: number }>(
+    'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
+    [name, email, passwordHash]
+  );
 
-  setSessionCookie(Number(result.lastInsertRowid));
+  setSessionCookie(rows[0].id);
   redirect('/dashboard');
 }
 
@@ -39,9 +40,11 @@ export async function loginAction(_prevState: AuthState, formData: FormData): Pr
   const email = String(formData.get('email') || '').trim().toLowerCase();
   const password = String(formData.get('password') || '');
 
-  const user = db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(email) as
-    | { id: number; password_hash: string }
-    | undefined;
+  const rows = await query<{ id: number; password_hash: string }>(
+    'SELECT id, password_hash FROM users WHERE email = $1',
+    [email]
+  );
+  const user = rows[0];
 
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return { error: 'E-mail ou senha incorretos.' };

@@ -1,47 +1,71 @@
-import Database from 'better-sqlite3';
-import fs from 'fs';
-import path from 'path';
+import { Pool } from 'pg';
 
-const dataDir = path.join(process.cwd(), 'data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+const connectionString =
+  process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING;
 
-const dbPath = path.join(dataDir, 'app.db');
+if (!connectionString) {
+  throw new Error(
+    'Nenhuma connection string de banco encontrada. Defina POSTGRES_URL (ou DATABASE_URL) nas variáveis de ambiente.'
+  );
+}
 
 declare global {
   // eslint-disable-next-line no-var
-  var __ddvDb: Database.Database | undefined;
+  var __ddvPool: Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __ddvSchemaReady: Promise<void> | undefined;
 }
 
-export const db = global.__ddvDb ?? new Database(dbPath);
-if (process.env.NODE_ENV !== 'production') global.__ddvDb = db;
+export const pool =
+  global.__ddvPool ??
+  new Pool({
+    connectionString,
+    ssl: connectionString.includes('localhost') || connectionString.includes('127.0.0.1')
+      ? false
+      : { rejectUnauthorized: false },
+  });
+if (process.env.NODE_ENV !== 'production') global.__ddvPool = pool;
 
-db.pragma('journal_mode = WAL');
+async function createSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      extra_mensal NUMERIC NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    extra_mensal REAL NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
+    CREATE TABLE IF NOT EXISTS debts (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      tipo TEXT NOT NULL DEFAULT 'outra',
+      saldo NUMERIC NOT NULL,
+      taxa_mensal NUMERIC NOT NULL,
+      minimo NUMERIC NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
-  CREATE TABLE IF NOT EXISTS debts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    nome TEXT NOT NULL,
-    tipo TEXT NOT NULL DEFAULT 'outra',
-    saldo REAL NOT NULL,
-    taxa_mensal REAL NOT NULL,
-    minimo REAL NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
+    CREATE TABLE IF NOT EXISTS checklist_state (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, item_id)
+    );
+  `);
+}
 
-  CREATE TABLE IF NOT EXISTS checklist_state (
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    item_id TEXT NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (user_id, item_id)
-  );
-`);
+export function ensureSchema(): Promise<void> {
+  if (!global.__ddvSchemaReady) {
+    global.__ddvSchemaReady = createSchema();
+  }
+  return global.__ddvSchemaReady;
+}
+
+export async function query<T = any>(text: string, params: unknown[] = []): Promise<T[]> {
+  await ensureSchema();
+  const result = await pool.query(text, params);
+  return result.rows as T[];
+}

@@ -2,8 +2,8 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { AppNav } from '@/components/AppNav';
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const user = getCurrentUser();
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  const user = await getCurrentUser();
   if (!user) redirect('/login');
 
   return (

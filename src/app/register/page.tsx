@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { registerAction } from '@/actions/auth';
 import { AuthForm } from '@/components/AuthForm';
 
-export default function RegisterPage() {
-  if (getCurrentUser()) redirect('/dashboard');
+export default async function RegisterPage() {
+  if (await getCurrentUser()) redirect('/dashboard');
   return <AuthForm action={registerAction} mode="register" />;
 }

@@ -1,13 +1,14 @@
 import { getCurrentUser } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { query } from '@/lib/db';
 import { blocosChecklist } from '@/lib/checklistItems';
 import { ChecklistBlock } from '@/components/ChecklistBlock';
 
-export default function ChecklistPage() {
-  const user = getCurrentUser()!;
-  const rows = db
-    .prepare('SELECT item_id FROM checklist_state WHERE user_id = ? AND done = 1')
-    .all(user.id) as { item_id: string }[];
+export default async function ChecklistPage() {
+  const user = (await getCurrentUser())!;
+  const rows = await query<{ item_id: string }>(
+    'SELECT item_id FROM checklist_state WHERE user_id = $1 AND done = 1',
+    [user.id]
+  );
   const doneIds = new Set(rows.map((r) => r.item_id));
 
   return (

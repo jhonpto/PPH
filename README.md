@@ -15,7 +15,26 @@ App web (Next.js) do produto **Data da Virada**: descubra o mês em que você fi
 
 ## Stack
 
-Next.js 14 (App Router) + TypeScript + Tailwind CSS + SQLite (better-sqlite3), sem serviços externos.
+Next.js 14 (App Router) + TypeScript + Tailwind CSS + Postgres (via `pg`).
+
+## Variáveis de ambiente
+
+Veja `.env.example`. Você precisa de:
+
+- `POSTGRES_URL`: connection string de um banco Postgres
+- `SESSION_SECRET`: chave aleatória para assinar o cookie de sessão
+
+## Publicando na Vercel (grátis)
+
+1. Crie uma conta em https://vercel.com e conecte com o GitHub.
+2. Clique em **Add New > Project**, escolha este repositório e a branch com o app.
+3. Antes de fazer o deploy, vá em **Storage > Create Database > Postgres** (Neon), crie o banco
+   e clique em **Connect Project** apontando para este projeto — a Vercel já injeta a variável
+   `POSTGRES_URL` automaticamente.
+4. Em **Settings > Environment Variables**, adicione `SESSION_SECRET` com um valor aleatório
+   (gere um com `openssl rand -base64 32`, por exemplo).
+5. Clique em **Deploy**. Ao final você recebe uma URL pública (tipo `seu-app.vercel.app`) pra abrir
+   no navegador ou celular. As tabelas do banco são criadas automaticamente no primeiro acesso.
 
 ## Rodando localmente
 
@@ -24,7 +43,7 @@ npm install
 npm run dev
 ```
 
-Acesse http://localhost:3000. O banco SQLite é criado automaticamente em `data/app.db` na primeira execução.
+Requer um Postgres local ou remoto configurado via `POSTGRES_URL`. Acesse http://localhost:3000.
 
 ## Build de produção
 

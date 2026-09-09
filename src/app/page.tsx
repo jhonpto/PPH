@@ -2,8 +2,8 @@ import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 
-export default function LandingPage() {
-  const user = getCurrentUser();
+export default async function LandingPage() {
+  const user = await getCurrentUser();
   if (user) redirect('/dashboard');
 
   return (

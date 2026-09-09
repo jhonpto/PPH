@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { query } from '@/lib/db';
 import { calcularDataVirada, formatarMesAno } from '@/lib/calc';
 import { DebtForm } from '@/components/DebtForm';
 import { DebtList, type DebtRow } from '@/components/DebtList';
@@ -7,11 +7,26 @@ import { ExtraForm } from '@/components/ExtraForm';
 
 const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-export default function DashboardPage() {
-  const user = getCurrentUser()!;
-  const debts = db
-    .prepare('SELECT id, nome, tipo, saldo, taxa_mensal, minimo FROM debts WHERE user_id = ? ORDER BY created_at')
-    .all(user.id) as DebtRow[];
+export default async function DashboardPage() {
+  const user = (await getCurrentUser())!;
+  const rawDebts = await query<{
+    id: number;
+    nome: string;
+    tipo: string;
+    saldo: string;
+    taxa_mensal: string;
+    minimo: string;
+  }>('SELECT id, nome, tipo, saldo, taxa_mensal, minimo FROM debts WHERE user_id = $1 ORDER BY created_at', [
+    user.id,
+  ]);
+  const debts: DebtRow[] = rawDebts.map((d) => ({
+    id: d.id,
+    nome: d.nome,
+    tipo: d.tipo,
+    saldo: Number(d.saldo),
+    taxa_mensal: Number(d.taxa_mensal),
+    minimo: Number(d.minimo),
+  }));
 
   const resultado = calcularDataVirada(
     debts.map((d) => ({ id: d.id, nome: d.nome, saldo: d.saldo, taxaMensal: d.taxa_mensal, minimo: d.minimo })),
