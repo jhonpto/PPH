@@ -46,7 +46,14 @@ export function AuthForm({
           <input className="input-field" id="email" name="email" type="email" placeholder="voce@email.com" required />
         </div>
         <div>
-          <label className="label-field" htmlFor="password">Senha</label>
+          <div className="flex items-center justify-between">
+            <label className="label-field" htmlFor="password">Senha</label>
+            {mode === 'login' && (
+              <Link href="/esqueci-senha" className="mb-1.5 text-xs font-medium text-magenta hover:underline">
+                Esqueci minha senha
+              </Link>
+            )}
+          </div>
           <input className="input-field" id="password" name="password" type="password" placeholder="••••••••" required minLength={6} />
         </div>
 

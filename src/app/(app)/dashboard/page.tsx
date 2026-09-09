@@ -4,6 +4,8 @@ import { calcularDataVirada, formatarMesAno } from '@/lib/calc';
 import { DebtForm } from '@/components/DebtForm';
 import { DebtList, type DebtRow } from '@/components/DebtList';
 import { ExtraForm } from '@/components/ExtraForm';
+import { PayoffChart } from '@/components/PayoffChart';
+import { ExportPdfButton } from '@/components/ExportPdfButton';
 
 const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -33,41 +35,51 @@ export default async function DashboardPage() {
     user.extra_mensal
   );
 
+  const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl">Sua Matriz de Realocação de Pagamentos</h1>
-        <p className="mt-2 text-neutral-600">
-          Cadastre todas as suas dívidas para descobrir sua Data da Virada — o mês em que você fica livre delas.
-        </p>
+      <div className="hidden print:block">
+        <p className="font-script text-2xl text-gold">Data da Virada</p>
+        <p className="text-sm text-neutral-500">Plano de {user.name} — gerado em {hoje}</p>
+      </div>
+
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl">Sua Matriz de Realocação de Pagamentos</h1>
+          <p className="mt-2 text-neutral-600">
+            Cadastre todas as suas dívidas para descobrir sua Data da Virada — o mês em que você fica livre delas.
+          </p>
+        </div>
+        {resultado && <ExportPdfButton />}
       </div>
 
       {resultado && (
-        <div className="card bg-gradient-to-br from-magenta to-magenta-dark text-white">
+        <div className="card bg-gradient-to-br from-magenta to-magenta-dark text-white print:!bg-none print:!bg-white print:!text-magenta-dark print:ring-1 print:ring-magenta/30">
           {resultado.comEstrategia.estagnado ? (
             <>
-              <p className="font-script text-xl text-blush">com o valor atual, o jogo não fecha</p>
-              <h2 className="mt-1 text-2xl !text-white">
+              <p className="font-script text-xl text-blush print:text-gold">com o valor atual, o jogo não fecha</p>
+              <h2 className="mt-1 text-2xl !text-white print:!text-magenta-dark">
                 Seus pagamentos mínimos não cobrem nem os juros. Aumente o valor extra mensal ou renegocie as taxas.
               </h2>
             </>
           ) : (
             <>
-              <p className="font-script text-2xl text-blush">sua data da virada é</p>
-              <h2 className="mt-1 text-4xl capitalize !text-white sm:text-5xl">
+              <p className="font-script text-2xl text-blush print:text-gold">sua data da virada é</p>
+              <h2 className="mt-1 text-4xl capitalize !text-white sm:text-5xl print:!text-magenta-dark">
                 {formatarMesAno(resultado.dataVirada)}
               </h2>
-              <p className="mt-3 text-blush/90">
+              <p className="mt-3 text-blush/90 print:text-neutral-700">
                 Isso é daqui a <strong>{resultado.comEstrategia.meses} meses</strong>, pagando um total de{' '}
                 <strong>{brl(resultado.comEstrategia.totalJuros)}</strong> em juros.
               </p>
               {resultado.mesesAntecipados === -1 && (
-                <p className="mt-2 rounded-lg bg-white/10 px-3 py-2 text-sm">
+                <p className="mt-2 rounded-lg bg-white/10 px-3 py-2 text-sm print:bg-blush print:text-neutral-700">
                   Sem a Matriz, ao menos uma dessas dívidas nunca seria quitada só com o pagamento mínimo — o juro come tudo.
                 </p>
               )}
               {resultado.mesesAntecipados > 0 && (
-                <p className="mt-2 rounded-lg bg-white/10 px-3 py-2 text-sm">
+                <p className="mt-2 rounded-lg bg-white/10 px-3 py-2 text-sm print:bg-blush print:text-neutral-700">
                   Isso é <strong>{resultado.mesesAntecipados} meses mais rápido</strong> do que pagando cada dívida
                   separadamente, sem realocar nada.
                 </p>
@@ -77,8 +89,19 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <ExtraForm extraMensal={user.extra_mensal} />
-      <DebtForm />
+      {resultado && (
+        <PayoffChart
+          comEstrategia={resultado.comEstrategia.pontosCronograma}
+          semEstrategia={resultado.semEstrategia.pontosCronograma}
+        />
+      )}
+
+      <div className="print:hidden">
+        <ExtraForm extraMensal={user.extra_mensal} />
+      </div>
+      <div className="print:hidden">
+        <DebtForm />
+      </div>
       <DebtList debts={debts} />
     </div>
   );

@@ -10,7 +10,7 @@ const links = [
 
 export function AppNav({ userName }: { userName: string }) {
   return (
-    <header className="border-b border-black/5 bg-white/70 backdrop-blur-sm">
+    <header className="border-b border-black/5 bg-white/70 backdrop-blur-sm print:hidden">
       <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-6 py-4">
         <Link href="/dashboard" className="font-heading text-lg font-extrabold text-magenta-dark">
           Data da Virada

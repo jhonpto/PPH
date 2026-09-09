@@ -61,7 +61,7 @@ function simulateComEstrategia(debtsInput: DebtInput[], extraMensal: number): Si
   return { meses: month, totalJuros, estagnado: month >= MAX_MONTHS, pontosCronograma };
 }
 
-function simulateSemEstrategia(debtsInput: DebtInput[]): SimulationResult {
+function simulateSemEstrategia(debtsInput: DebtInput[], horizonMeses: number): SimulationResult {
   let maxMeses = 0;
   let totalJuros = 0;
   let estagnado = false;
@@ -89,7 +89,21 @@ function simulateSemEstrategia(debtsInput: DebtInput[]): SimulationResult {
     maxMeses = Math.max(maxMeses, meses);
   }
 
-  return { meses: maxMeses, totalJuros, estagnado, pontosCronograma: [] };
+  // Serie mes a mes (sem redirecionar pagamentos) so para comparacao visual no grafico.
+  const working = debtsInput.map((d) => ({ ...d }));
+  const pontosCronograma: { mes: number; saldoTotal: number }[] = [];
+  for (let mes = 1; mes <= horizonMeses; mes++) {
+    for (const d of working) {
+      if (d.saldo <= 0) continue;
+      const juros = d.saldo * (d.taxaMensal / 100);
+      d.saldo += juros;
+      const pagamento = Math.min(d.minimo, d.saldo);
+      d.saldo -= pagamento;
+    }
+    pontosCronograma.push({ mes, saldoTotal: working.reduce((s, d) => s + Math.max(d.saldo, 0), 0) });
+  }
+
+  return { meses: maxMeses, totalJuros, estagnado, pontosCronograma };
 }
 
 export interface ComparativoResult {
@@ -103,7 +117,8 @@ export function calcularDataVirada(debts: DebtInput[], extraMensal: number, hoje
   if (debts.length === 0) return null;
 
   const comEstrategia = simulateComEstrategia(debts, extraMensal);
-  const semEstrategia = simulateSemEstrategia(debts);
+  const horizonteGrafico = Math.max(comEstrategia.pontosCronograma.length, 1);
+  const semEstrategia = simulateSemEstrategia(debts, horizonteGrafico);
 
   const dataVirada = new Date(hoje);
   dataVirada.setMonth(dataVirada.getMonth() + comEstrategia.meses);

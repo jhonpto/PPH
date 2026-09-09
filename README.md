@@ -12,6 +12,9 @@ App web (Next.js) do produto **Data da Virada**: descubra o mês em que você fi
 - Guia da Virada (conteúdo educativo em acordeão)
 - Checklist de execução (progresso salvo por usuário)
 - Raio-X do Cheque Especial (calculadora de custo real do rotativo/cheque especial)
+- Gráfico comparando a evolução da dívida com e sem a estratégia
+- Exportar o plano em PDF (via impressão do navegador, com layout dedicado)
+- Esqueci minha senha (link de redefinição por e-mail via Resend; sem isso, o link aparece na tela)
 
 ## Stack
 
@@ -23,6 +26,8 @@ Veja `.env.example`. Você precisa de:
 
 - `POSTGRES_URL`: connection string de um banco Postgres
 - `SESSION_SECRET`: chave aleatória para assinar o cookie de sessão
+- `RESEND_API_KEY` (opcional): para enviar de verdade o e-mail de redefinição de senha via
+  [Resend](https://resend.com). Sem essa chave, o link de redefinição é exibido direto na tela.
 
 ## Publicando na Vercel (grátis)
 
