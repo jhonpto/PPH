@@ -1,58 +1,92 @@
-# Data da Virada
+# Centro Contas
 
-App web (Next.js) do produto **Data da Virada**: descubra o mês em que você fica livre das dívidas
-(cartão rotativo, cheque especial, CDC, financiamento) usando a Matriz de Realocação de Pagamentos.
+Web app mobile-first para controlar contas a receber dos lojistas do Centro do Reparo.
 
-## Funcionalidades
+## O que já está pronto
 
-- Cadastro e login (sessão via cookie assinado, senha com hash bcrypt)
-- Cadastro de dívidas (saldo, juro mensal, pagamento mínimo)
-- Cálculo automático da "Data da Virada" (simulação mês a mês da estratégia de realocação
-  de pagamentos, priorizando sempre a dívida de juro mais alto) comparado ao cenário sem estratégia
-- Guia da Virada (conteúdo educativo em acordeão)
-- Checklist de execução (progresso salvo por usuário)
-- Raio-X do Cheque Especial (calculadora de custo real do rotativo/cheque especial)
-- Gráfico comparando a evolução da dívida com e sem a estratégia
-- Exportar o plano em PDF (via impressão do navegador, com layout dedicado)
-- Esqueci minha senha (link de redefinição por e-mail via Resend; sem isso, o link aparece na tela)
+- Dashboard com total em aberto, recebido no mês, quantidade de devedores e valores com +30 dias.
+- Cadastro de lojistas com WhatsApp.
+- Lançamento de serviço com aparelho, descrição, valor e data.
+- Serviços em aberto, pagos e histórico completo.
+- Seleção de vários serviços para baixa conjunta.
+- Pagamento parcial: distribui o valor do mais antigo para o mais recente e deixa o saldo restante aberto.
+- Registro separado de cada pagamento e das vinculações com os serviços.
+- Histórico de pagamentos.
+- Fechamento por período.
+- Mensagem pronta para copiar.
+- Botão que abre o WhatsApp com a cobrança preenchida.
+- Comprovante de pagamento e opção de salvar como PDF pela impressão do navegador.
+- Modo local para testar sem configurar nada.
+- Supabase para uso real e sincronização entre aparelhos.
+- Layout responsivo para celular e computador.
 
-## Stack
+## Testar imediatamente no computador
 
-Next.js 14 (App Router) + TypeScript + Tailwind CSS + Postgres (via `pg`).
-
-## Variáveis de ambiente
-
-Veja `.env.example`. Você precisa de:
-
-- `POSTGRES_URL`: connection string de um banco Postgres
-- `SESSION_SECRET`: chave aleatória para assinar o cookie de sessão
-- `RESEND_API_KEY` (opcional): para enviar de verdade o e-mail de redefinição de senha via
-  [Resend](https://resend.com). Sem essa chave, o link de redefinição é exibido direto na tela.
-
-## Publicando na Vercel (grátis)
-
-1. Crie uma conta em https://vercel.com e conecte com o GitHub.
-2. Clique em **Add New > Project**, escolha este repositório e a branch com o app.
-3. Antes de fazer o deploy, vá em **Storage > Create Database > Postgres** (Neon), crie o banco
-   e clique em **Connect Project** apontando para este projeto — a Vercel já injeta a variável
-   `POSTGRES_URL` automaticamente.
-4. Em **Settings > Environment Variables**, adicione `SESSION_SECRET` com um valor aleatório
-   (gere um com `openssl rand -base64 32`, por exemplo).
-5. Clique em **Deploy**. Ao final você recebe uma URL pública (tipo `seu-app.vercel.app`) pra abrir
-   no navegador ou celular. As tabelas do banco são criadas automaticamente no primeiro acesso.
-
-## Rodando localmente
+1. Instale Node.js 20 ou superior.
+2. Abra esta pasta no terminal.
+3. Execute:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Requer um Postgres local ou remoto configurado via `POSTGRES_URL`. Acesse http://localhost:3000.
+4. Abra o endereço mostrado pelo Vite.
 
-## Build de produção
+Sem arquivo `.env`, o sistema entra em **Modo local**. Os dados ficam somente naquele navegador.
+
+## Colocar online com Supabase
+
+### 1. Criar o banco
+
+1. Crie um projeto em https://supabase.com.
+2. Abra `SQL Editor`.
+3. Cole e execute todo o arquivo `supabase.sql` deste projeto.
+4. Em `Authentication > Providers`, deixe Email habilitado.
+
+### 2. Configurar o app
+
+No Supabase, abra `Project Settings > API` e copie:
+
+- Project URL
+- anon/public key
+
+Na raiz do projeto, crie `.env` copiando `.env.example`:
+
+```env
+VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
+VITE_SUPABASE_ANON_KEY=SUA_CHAVE_ANON
+```
+
+Depois execute novamente:
 
 ```bash
-npm run build
-npm start
+npm run dev
 ```
+
+Agora aparecerá a tela de login. No primeiro acesso, crie sua conta.
+
+## Publicar no Vercel
+
+1. Suba a pasta para um repositório GitHub, ou importe o projeto diretamente no Vercel.
+2. No projeto do Vercel, adicione as duas variáveis de ambiente do `.env`.
+3. Build command: `npm run build`.
+4. Output directory: `dist`.
+5. Faça o deploy.
+
+## Claude Code / Work
+
+O projeto já está completo. Você pode abrir esta pasta no Claude Code ou no ChatGPT Work para fazer ajustes visuais ou acrescentar recursos. Não é necessário reconstruir a arquitetura.
+
+Pedido recomendado para o agente:
+
+> Abra o projeto Centro Contas, execute npm install e npm run build. Não altere a regra de negócio sem necessidade. Valide o fluxo: cadastrar lojista > lançar serviços > selecionar serviços > pagamento total > pagamento parcial > fechamento > recibo > WhatsApp. Se encontrar erro, corrija e execute o build novamente.
+
+## Estrutura de dados
+
+- `stores`: lojistas.
+- `services`: cada serviço lançado.
+- `payments`: cada pagamento recebido.
+- `payment_allocations`: quanto de cada pagamento foi aplicado em cada serviço.
+
+Um serviço nunca é apagado ao ser pago. O saldo em aberto é calculado como `valor do serviço - pagamentos vinculados`.
