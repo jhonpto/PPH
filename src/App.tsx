@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle, ArrowLeft, Banknote, Check, ChevronRight, ClipboardCopy,
-  CreditCard, Download, FileText, Home, LogOut, MessageCircle, Plus,
+  CreditCard, Download, FileText, Home, LogOut, MessageCircle, Pencil, Plus,
   ReceiptText, Search, Settings, Store as StoreIcon, Trash2, Users, X
 } from 'lucide-react'
 import { supabase, supabaseConfigured } from './supabase'
@@ -19,6 +19,9 @@ const today = () => new Date().toISOString().slice(0,10)
 const monthStart = () => { const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10) }
 const uid = () => crypto.randomUUID()
 const digits = (s:string) => s.replace(/\D/g,'')
+const maskMoney = (raw:string) => { const d=raw.replace(/\D/g,''); const n=Number(d||'0')/100; return n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}) }
+const unmaskMoney = (s:string) => Number(s.replace(/\./g,'').replace(',','.')) || 0
+const moneyMaskFromNumber = (n:number) => maskMoney(Math.round(n*100).toString())
 const localKey='centro-contas-v1'
 const settingsKey='centro-contas-settings'
 
@@ -36,12 +39,13 @@ export default function App(){
   const [view,setView]=useState<View>('dashboard')
   const [selectedStoreId,setSelectedStoreId]=useState<string>('')
   const [toast,setToast]=useState('')
+  const [recovery,setRecovery]=useState(false)
   const [settings,setSettings]=useState(()=>JSON.parse(localStorage.getItem(settingsKey)||'{"businessName":"Centro do Reparo"}'))
 
   useEffect(()=>{
     if(!supabaseConfigured){ setData(loadLocal()); setLoading(false); setAuthLoading(false); return }
     supabase.auth.getSession().then(({data})=>{setSession(data.session);setAuthLoading(false)})
-    const {data:sub}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s))
+    const {data:sub}=supabase.auth.onAuthStateChange((event,s)=>{setSession(s); if(event==='PASSWORD_RECOVERY') setRecovery(true)})
     return ()=>sub.subscription.unsubscribe()
   },[])
 
@@ -75,6 +79,13 @@ export default function App(){
       const {error}=await supabase.from('stores').insert(payload); if(error) throw error; await refresh()
     } else mutateLocal(d=>({...d,stores:[...d.stores,{id:uid(),...payload,created_at:new Date().toISOString()}]}))
     flash('Lojista cadastrado')
+  }
+
+  async function updateStore(id:string, payload:{name:string;phone:string;note:string}){
+    if(supabaseConfigured){
+      const {error}=await supabase.from('stores').update(payload).eq('id',id); if(error) throw error; await refresh()
+    } else mutateLocal(d=>({...d,stores:d.stores.map(s=>s.id===id?{...s,...payload}:s)}))
+    flash('Lojista atualizado')
   }
 
   async function addService(payload:{store_id:string;service_date:string;device:string;description:string;amount:number}){
@@ -129,6 +140,7 @@ export default function App(){
   function openStore(id:string){setSelectedStoreId(id);setView('store')}
 
   if(authLoading) return <Center><div className="loader"/></Center>
+  if(supabaseConfigured && recovery) return <ResetPasswordScreen onDone={()=>setRecovery(false)}/>
   if(supabaseConfigured && !session) return <AuthScreen/>
 
   const store=data.stores.find(s=>s.id===selectedStoreId)
@@ -149,7 +161,7 @@ export default function App(){
         view==='stores'?<StoresPage data={data} onOpenStore={openStore} onAdd={addStore}/>:
         view==='payments'?<PaymentsPage data={data} businessName={settings.businessName}/>:
         view==='settings'?<SettingsPage settings={settings} onSave={(s:any)=>{setSettings(s);localStorage.setItem(settingsKey,JSON.stringify(s));flash('Ajustes salvos')}} online={supabaseConfigured}/>:
-        store?<StorePage store={store} data={data} onBack={()=>setView('stores')} onAddService={addService} onDeleteService={deleteService} onPayment={recordPayment} onDeleteStore={deleteStore} businessName={settings.businessName}/>:null}
+        store?<StorePage store={store} data={data} onBack={()=>setView('stores')} onAddService={addService} onDeleteService={deleteService} onPayment={recordPayment} onDeleteStore={deleteStore} onUpdateStore={updateStore} businessName={settings.businessName}/>:null}
     </main>
 
     <nav className="bottom-nav">
@@ -166,9 +178,31 @@ function Center({children}:{children:any}){return <div className="center">{child
 function NavButton({active,icon,label,onClick}:{active:boolean;icon:any;label:string;onClick:()=>void}){return <button className={'nav-button '+(active?'active':'')} onClick={onClick}>{icon}<span>{label}</span></button>}
 
 function AuthScreen(){
-  const [email,setEmail]=useState(''); const [pass,setPass]=useState(''); const [mode,setMode]=useState<'login'|'signup'>('login'); const [msg,setMsg]=useState(''); const [busy,setBusy]=useState(false)
-  async function submit(e:any){e.preventDefault();setBusy(true);setMsg(''); const r=mode==='login'?await supabase.auth.signInWithPassword({email,password:pass}):await supabase.auth.signUp({email,password:pass}); if(r.error)setMsg(r.error.message); else if(mode==='signup')setMsg('Conta criada. Se a confirmação de e-mail estiver ativa, confirme antes de entrar.'); setBusy(false)}
-  return <Center><div className="auth-card"><div className="brand-mark big">CR</div><h1>Centro Contas</h1><p>Controle de contas a receber dos lojistas.</p><form onSubmit={submit}><label>E-mail<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required/></label><label>Senha<input type="password" value={pass} minLength={6} onChange={e=>setPass(e.target.value)} required/></label><button className="primary full" disabled={busy}>{busy?'Aguarde...':mode==='login'?'Entrar':'Criar conta'}</button></form>{msg&&<div className="form-msg">{msg}</div>}<button className="link" onClick={()=>setMode(mode==='login'?'signup':'login')}>{mode==='login'?'Primeiro acesso? Criar conta':'Já tenho conta'}</button></div></Center>
+  const [email,setEmail]=useState(''); const [pass,setPass]=useState(''); const [mode,setMode]=useState<'login'|'signup'|'forgot'>('login'); const [msg,setMsg]=useState(''); const [busy,setBusy]=useState(false)
+  async function submit(e:any){
+    e.preventDefault();setBusy(true);setMsg('')
+    if(mode==='forgot'){
+      const r=await supabase.auth.resetPasswordForEmail(email,{redirectTo:window.location.origin})
+      setMsg(r.error?r.error.message:'Enviamos um link de redefinição para o seu e-mail.')
+      setBusy(false); return
+    }
+    const r=mode==='login'?await supabase.auth.signInWithPassword({email,password:pass}):await supabase.auth.signUp({email,password:pass})
+    if(r.error)setMsg(r.error.message); else if(mode==='signup')setMsg('Conta criada. Se a confirmação de e-mail estiver ativa, confirme antes de entrar.')
+    setBusy(false)
+  }
+  return <Center><div className="auth-card"><div className="brand-mark big">CR</div><h1>Centro Contas</h1><p>{mode==='forgot'?'Informe seu e-mail para receber o link de redefinição.':'Controle de contas a receber dos lojistas.'}</p><form onSubmit={submit}><label>E-mail<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required/></label>{mode!=='forgot'&&<label>Senha<input type="password" value={pass} minLength={6} onChange={e=>setPass(e.target.value)} required/></label>}<button className="primary full" disabled={busy}>{busy?'Aguarde...':mode==='login'?'Entrar':mode==='signup'?'Criar conta':'Enviar link'}</button></form>{msg&&<div className="form-msg">{msg}</div>}{mode==='login'&&<button className="link" onClick={()=>{setMode('forgot');setMsg('')}}>Esqueci minha senha</button>}<button className="link" onClick={()=>{setMode(mode==='login'?'signup':'login');setMsg('')}}>{mode==='login'?'Primeiro acesso? Criar conta':mode==='signup'?'Já tenho conta':'Voltar para o login'}</button></div></Center>
+}
+
+function ResetPasswordScreen({onDone}:{onDone:()=>void}){
+  const [pass,setPass]=useState(''); const [msg,setMsg]=useState(''); const [busy,setBusy]=useState(false)
+  async function submit(e:any){
+    e.preventDefault();setBusy(true);setMsg('')
+    const r=await supabase.auth.updateUser({password:pass})
+    if(r.error) setMsg(r.error.message)
+    else { setMsg('Senha atualizada!'); setTimeout(onDone,900) }
+    setBusy(false)
+  }
+  return <Center><div className="auth-card"><div className="brand-mark big">CR</div><h1>Nova senha</h1><p>Defina uma nova senha para continuar.</p><form onSubmit={submit}><label>Nova senha<input autoFocus type="password" value={pass} minLength={6} onChange={e=>setPass(e.target.value)} required/></label><button className="primary full" disabled={busy}>{busy?'Aguarde...':'Salvar nova senha'}</button></form>{msg&&<div className="form-msg">{msg}</div>}</div></Center>
 }
 
 function Dashboard({data,onOpenStore,onNewService}:{data:DataSet;onOpenStore:(id:string)=>void;onNewService:(id:string)=>void}){
@@ -196,8 +230,8 @@ function StoresPage({data,onOpenStore,onAdd}:{data:DataSet;onOpenStore:(id:strin
   return <Page><Header title="Lojistas" subtitle={`${data.stores.length} cadastrados`} action={<button className="primary" onClick={()=>setModal(true)}><Plus/>Novo lojista</button>}/><SearchBox value={q} onChange={setQ} placeholder="Buscar por nome"/><div className="list-card">{stores.map(st=><button className="debtor-row" key={st.id} onClick={()=>onOpenStore(st.id)}><div className="avatar"><StoreIcon/></div><div className="grow"><b>{st.name}</b><span>{st.phone||'Sem telefone'}</span></div><div className="row-money"><b className={storeOpen(st.id,data)>0?'danger-text':''}>{money(storeOpen(st.id,data))}</b><span>em aberto</span></div><ChevronRight/></button>)}{!stores.length&&<Empty title="Nenhum lojista" text="Cadastre seu primeiro lojista para começar."/>}</div>{modal&&<StoreModal onClose={()=>setModal(false)} onSave={async p=>{await onAdd(p);setModal(false)}}/>}</Page>
 }
 
-function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onDeleteStore,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;businessName:string}){
-  const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [selected,setSelected]=useState<string[]>([])
+function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onDeleteStore,onUpdateStore,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;businessName:string}){
+  const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [editModal,setEditModal]=useState(false); const [selected,setSelected]=useState<string[]>([])
   const services=data.services.filter(s=>s.store_id===store.id).sort((a,b)=>b.service_date.localeCompare(a.service_date))
   const visible=services.filter(s=>tab==='all'?true:tab==='open'?serviceOutstanding(s.id,data)>0.009:serviceOutstanding(s.id,data)<=0.009)
   const selectedTotal=selected.reduce((sum,id)=>sum+serviceOutstanding(id,data),0)
@@ -207,7 +241,7 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onD
   const openIds=visible.filter(s=>serviceOutstanding(s.id,data)>0.009).map(s=>s.id)
   return <Page>
     <button className="back" onClick={onBack}><ArrowLeft/>Lojistas</button>
-    <div className="store-title"><div><h1>{store.name}</h1><p>{store.phone||'Sem WhatsApp cadastrado'}</p></div><button className="primary" onClick={()=>setServiceModal(true)}><Plus/>Novo serviço</button></div>
+    <div className="store-title"><div><h1>{store.name}</h1><p>{store.phone||'Sem WhatsApp cadastrado'}</p></div><div className="store-actions"><button className="secondary" onClick={()=>setEditModal(true)}><Pencil size={17}/>Editar</button><button className="primary" onClick={()=>setServiceModal(true)}><Plus/>Novo serviço</button></div></div>
     <div className="metric-grid store-metrics"><Metric label="Saldo em aberto" value={money(open)} strong/><Metric label="Já recebido" value={money(paidTotal)}/><Metric label="Serviços" value={String(services.length)}/><Metric label="+30 dias" value={money(storeOld(store.id,data))} warn={storeOld(store.id,data)>0}/></div>
     <div className="action-strip"><button onClick={()=>setStatement(true)}><FileText/>Fechamento / cobrança</button>{selected.length>0&&<button className="receive" onClick={()=>setPaymentModal(true)}><Banknote/>Receber {money(selectedTotal)}</button>}</div>
     <div className="tabs"><button className={tab==='open'?'active':''} onClick={()=>{setTab('open');setSelected([])}}>Em aberto</button><button className={tab==='paid'?'active':''} onClick={()=>{setTab('paid');setSelected([])}}>Pagos</button><button className={tab==='all'?'active':''} onClick={()=>{setTab('all');setSelected([])}}>Todos</button></div>
@@ -215,7 +249,8 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onD
     <div className="service-list">{visible.map(s=>{const out=serviceOutstanding(s.id,data); const paid=s.amount-out; return <div className={'service-row '+(out<=0.009?'paid':'')} key={s.id}>{out>0.009?<input className="check" type="checkbox" checked={selected.includes(s.id)} onChange={()=>toggle(s.id)}/>:<div className="paid-check"><Check/></div>}<div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div><div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?'Pago':out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>{out>0.009&&servicePaid(s.id,data)<=0.009&&<button className="icon danger" title="Excluir" onClick={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}><Trash2/></button>}</div>})}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Esse lojista está em dia.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
     {serviceModal&&<ServiceModal storeId={store.id} onClose={()=>setServiceModal(false)} onSave={async p=>{await onAddService(p);setServiceModal(false)}}/>}
     {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note)=>{await onPayment(store.id,selected,amount,method,note);setSelected([]);setPaymentModal(false)}}/>}
-    {statement&&<StatementModal store={store} data={data} businessName={businessName} onClose={()=>setStatement(false)}/>}    
+    {statement&&<StatementModal store={store} data={data} businessName={businessName} onClose={()=>setStatement(false)}/>}
+    {editModal&&<StoreModal initial={store} onClose={()=>setEditModal(false)} onSave={async p=>{await onUpdateStore(store.id,p);setEditModal(false)}}/>}
     <div className="danger-zone"><button className="danger-outline" onClick={()=>confirm(`Excluir ${store.name} e todo o histórico? Essa ação não pode ser desfeita.`)&&onDeleteStore(store.id)}><Trash2/>Excluir lojista</button></div>
   </Page>
 }
@@ -238,19 +273,19 @@ function Empty({title,text}:{title:string;text:string}){return <div className="e
 
 function Modal({children,onClose,title}:{children:any;onClose:()=>void;title:string}){return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal"><div className="modal-head"><h2>{title}</h2><button className="icon" onClick={onClose}><X/></button></div>{children}</div></div>}
 
-function StoreModal({onClose,onSave}:{onClose:()=>void;onSave:(p:any)=>Promise<void>}){
-  const [name,setName]=useState(''); const [phone,setPhone]=useState(''); const [note,setNote]=useState(''); const [busy,setBusy]=useState(false)
-  return <Modal title="Novo lojista" onClose={onClose}><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave({name,phone,note})}finally{setBusy(false)}}}><label>Nome do lojista / loja<input autoFocus value={name} onChange={e=>setName(e.target.value)} required/></label><label>WhatsApp<input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(75) 99999-9999"/></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>Cadastrar</button></div></form></Modal>
+function StoreModal({initial,onClose,onSave}:{initial?:{name:string;phone:string;note:string};onClose:()=>void;onSave:(p:any)=>Promise<void>}){
+  const [name,setName]=useState(initial?.name||''); const [phone,setPhone]=useState(initial?.phone||''); const [note,setNote]=useState(initial?.note||''); const [busy,setBusy]=useState(false)
+  return <Modal title={initial?'Editar lojista':'Novo lojista'} onClose={onClose}><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave({name,phone,note})}finally{setBusy(false)}}}><label>Nome do lojista / loja<input autoFocus value={name} onChange={e=>setName(e.target.value)} required/></label><label>WhatsApp<input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(75) 99999-9999"/></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{initial?'Salvar':'Cadastrar'}</button></div></form></Modal>
 }
 
 function ServiceModal({storeId,onClose,onSave}:{storeId:string;onClose:()=>void;onSave:(p:any)=>Promise<void>}){
   const [device,setDevice]=useState(''); const [description,setDescription]=useState(''); const [amount,setAmount]=useState(''); const [date,setDate]=useState(today()); const [busy,setBusy]=useState(false)
-  return <Modal title="Novo serviço" onClose={onClose}><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave({store_id:storeId,service_date:date,device,description,amount:Number(amount.replace(',','.'))})}finally{setBusy(false)}}}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>Salvar serviço</button></div></form></Modal>
+  return <Modal title="Novo serviço" onClose={onClose}><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave({store_id:storeId,service_date:date,device,description,amount:unmaskMoney(amount)})}finally{setBusy(false)}}}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>Salvar serviço</button></div></form></Modal>
 }
 
 function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSave:(amount:number,method:string,note:string)=>Promise<void>}){
-  const [amount,setAmount]=useState(total.toFixed(2)); const [method,setMethod]=useState('PIX'); const [note,setNote]=useState(''); const [busy,setBusy]=useState(false); const val=Number(amount.replace(',','.'))
-  return <Modal title="Registrar pagamento" onClose={onClose}><div className="payment-total"><span>Selecionado</span><b>{money(total)}</b></div><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave(val,method,note)}catch(err:any){alert(err.message)}finally{setBusy(false)}}}><label>Valor recebido<input inputMode="decimal" value={amount} onChange={e=>setAmount(e.target.value)} required/></label>{val<total&&val>0&&<div className="info-box">Pagamento parcial. O sistema quitará os serviços selecionados do mais antigo para o mais recente e manterá o restante em aberto.</div>}<label>Forma de pagamento<select value={method} onChange={e=>setMethod(e.target.value)}><option>PIX</option><option>Dinheiro</option><option>Transferência</option><option>Cartão</option><option>Outro</option></select></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy||val<=0||val>total}>Confirmar {val>0?money(val):''}</button></div></form></Modal>
+  const [amount,setAmount]=useState(moneyMaskFromNumber(total)); const [method,setMethod]=useState('PIX'); const [note,setNote]=useState(''); const [busy,setBusy]=useState(false); const val=unmaskMoney(amount)
+  return <Modal title="Registrar pagamento" onClose={onClose}><div className="payment-total"><span>Selecionado</span><b>{money(total)}</b></div><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave(val,method,note)}catch(err:any){alert(err.message)}finally{setBusy(false)}}}><label>Valor recebido<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} required/></label>{val<total&&val>0&&<div className="info-box">Pagamento parcial. O sistema quitará os serviços selecionados do mais antigo para o mais recente e manterá o restante em aberto.</div>}<label>Forma de pagamento<select value={method} onChange={e=>setMethod(e.target.value)}><option>PIX</option><option>Dinheiro</option><option>Transferência</option><option>Cartão</option><option>Outro</option></select></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy||val<=0||val>total}>Confirmar {val>0?money(val):''}</button></div></form></Modal>
 }
 
 function StatementModal({store,data,businessName,onClose}:{store:Store;data:DataSet;businessName:string;onClose:()=>void}){
