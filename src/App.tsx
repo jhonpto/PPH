@@ -170,6 +170,27 @@ export default function App(){
     setView('stores'); setSelectedStoreId(''); flash('Lojista removido')
   }
 
+  async function resetStoreHistory(storeId:string){
+    if(supabaseConfigured){
+      const {error:e1}=await supabase.from('services').delete().eq('store_id',storeId); if(e1) throw e1
+      const {error:e2}=await supabase.from('payments').delete().eq('store_id',storeId); if(e2) throw e2
+      await refresh()
+    } else mutateLocal(d=>{
+      const serviceIds=d.services.filter(s=>s.store_id===storeId).map(s=>s.id)
+      const payIds=d.payments.filter(p=>p.store_id===storeId).map(p=>p.id)
+      return {stores:d.stores,services:d.services.filter(s=>s.store_id!==storeId),payments:d.payments.filter(p=>p.store_id!==storeId),allocations:d.allocations.filter(a=>!serviceIds.includes(a.service_id)&&!payIds.includes(a.payment_id))}
+    })
+    flash('Histórico zerado')
+  }
+
+  async function resetAll(){
+    if(supabaseConfigured){
+      const {error}=await supabase.from('stores').delete().not('id','is',null); if(error) throw error
+      await refresh()
+    } else { const empty={stores:[],services:[],payments:[],allocations:[]}; setData(empty); saveLocal(empty) }
+    setView('dashboard'); flash('Tudo resetado')
+  }
+
   function openStore(id:string){setSelectedStoreId(id);setView('store')}
 
   if(authLoading) return <Center><div className="loader"/></Center>
@@ -193,8 +214,8 @@ export default function App(){
         view==='dashboard'?<Dashboard data={data} onOpenStore={openStore} onNewService={(id)=>{setSelectedStoreId(id);setView('store')}} businessName={settings.businessName}/>:
         view==='stores'?<StoresPage data={data} onOpenStore={openStore} onAdd={addStore}/>:
         view==='payments'?<PaymentsPage data={data} businessName={settings.businessName}/>:
-        view==='settings'?<SettingsPage settings={settings} onSave={(s:any)=>{setSettings(s);localStorage.setItem(settingsKey,JSON.stringify(s));flash('Ajustes salvos')}} online={supabaseConfigured} theme={theme} onThemeChange={setTheme}/>:
-        store?<StorePage store={store} data={data} onBack={()=>setView('stores')} onAddService={addService} onDeleteService={deleteService} onUpdateService={updateService} onPayment={recordPayment} onDeleteStore={deleteStore} onUpdateStore={updateStore} businessName={settings.businessName}/>:null}
+        view==='settings'?<SettingsPage settings={settings} onSave={(s:any)=>{setSettings(s);localStorage.setItem(settingsKey,JSON.stringify(s));flash('Ajustes salvos')}} online={supabaseConfigured} theme={theme} onThemeChange={setTheme} onResetAll={resetAll}/>:
+        store?<StorePage store={store} data={data} onBack={()=>setView('stores')} onAddService={addService} onDeleteService={deleteService} onUpdateService={updateService} onPayment={recordPayment} onDeleteStore={deleteStore} onUpdateStore={updateStore} onResetHistory={resetStoreHistory} businessName={settings.businessName}/>:null}
     </main>
 
     <nav className="bottom-nav">
@@ -312,7 +333,7 @@ function StoresPage({data,onOpenStore,onAdd}:{data:DataSet;onOpenStore:(id:strin
   return <Page><Header title="Lojistas" subtitle={`${data.stores.length} cadastrados`} action={<button className="primary" onClick={()=>setModal(true)}><Plus/>Novo lojista</button>}/><SearchBox value={q} onChange={setQ} placeholder="Buscar por nome"/><div className="list-card">{stores.map(st=><button className="debtor-row" key={st.id} onClick={()=>onOpenStore(st.id)}><div className="avatar"><StoreIcon/></div><div className="grow"><b>{st.name}</b><span>{st.phone||'Sem telefone'}</span></div><div className="row-money"><b className={storeOpen(st.id,data)>0?'danger-text':''}>{money(storeOpen(st.id,data))}</b><span>em aberto</span></div><ChevronRight/></button>)}{!stores.length&&<Empty title="Nenhum lojista" text="Cadastre seu primeiro lojista para começar."/>}</div>{modal&&<StoreModal onClose={()=>setModal(false)} onSave={async p=>{await onAdd(p);setModal(false)}}/>}</Page>
 }
 
-function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateService,onPayment,onDeleteStore,onUpdateStore,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onUpdateService:(id:string,p:any)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;businessName:string}){
+function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateService,onPayment,onDeleteStore,onUpdateStore,onResetHistory,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onUpdateService:(id:string,p:any)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;onResetHistory:(id:string)=>Promise<void>;businessName:string}){
   const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [editingService,setEditingService]=useState<Service|null>(null); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [editModal,setEditModal]=useState(false); const [selected,setSelected]=useState<string[]>([])
   const services=data.services.filter(s=>s.store_id===store.id).sort((a,b)=>b.service_date.localeCompare(a.service_date))
   const visible=services.filter(s=>tab==='all'?true:tab==='open'?serviceOutstanding(s.id,data)>0.009:serviceOutstanding(s.id,data)<=0.009)
@@ -334,7 +355,7 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
     {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note)=>{await onPayment(store.id,selected,amount,method,note);setSelected([]);setPaymentModal(false)}}/>}
     {statement&&<StatementModal store={store} data={data} businessName={businessName} onClose={()=>setStatement(false)}/>}
     {editModal&&<StoreModal initial={store} onClose={()=>setEditModal(false)} onSave={async p=>{await onUpdateStore(store.id,p);setEditModal(false)}}/>}
-    <div className="danger-zone"><button className="danger-outline" onClick={()=>confirm(`Excluir ${store.name} e todo o histórico? Essa ação não pode ser desfeita.`)&&onDeleteStore(store.id)}><Trash2/>Excluir lojista</button></div>
+    <div className="danger-zone"><div className="store-actions"><button className="danger-outline" onClick={()=>confirm(`Zerar todo o histórico de ${store.name} (serviços e pagamentos)? O cadastro do lojista continua, só o histórico some. Essa ação não pode ser desfeita.`)&&onResetHistory(store.id)}><Trash2/>Zerar histórico</button><button className="danger-outline" onClick={()=>confirm(`Excluir ${store.name} e todo o histórico? Essa ação não pode ser desfeita.`)&&onDeleteStore(store.id)}><Trash2/>Excluir lojista</button></div></div>
   </Page>
 }
 
@@ -343,9 +364,12 @@ function PaymentsPage({data,businessName}:{data:DataSet;businessName:string}){
   return <Page><Header title="Pagamentos" subtitle="Histórico de tudo que entrou."/><div className="list-card">{data.payments.map(p=>{const st=data.stores.find(s=>s.id===p.store_id); const qty=data.allocations.filter(a=>a.payment_id===p.id).length; return <button className="debtor-row" onClick={()=>setReceipt(p)} key={p.id}><div className="avatar"><CreditCard/></div><div className="grow"><b>{st?.name||'Lojista removido'}</b><span>{dateBR(p.paid_at)} · {qty} serviço(s) · {p.method||'Não informado'}</span></div><div className="row-money success"><b>{money(p.amount)}</b><ChevronRight/></div></button>})}{!data.payments.length&&<Empty title="Nenhum pagamento ainda" text="As baixas realizadas aparecerão aqui."/>}</div>{receipt&&<ReceiptModal payment={receipt} data={data} businessName={businessName} onClose={()=>setReceipt(null)}/>}</Page>
 }
 
-function SettingsPage({settings,onSave,online,theme,onThemeChange}:{settings:any;onSave:(s:any)=>void;online:boolean;theme:string;onThemeChange:(t:string)=>void}){
+function SettingsPage({settings,onSave,online,theme,onThemeChange,onResetAll}:{settings:any;onSave:(s:any)=>void;online:boolean;theme:string;onThemeChange:(t:string)=>void;onResetAll:()=>Promise<void>}){
   const [name,setName]=useState(settings.businessName||'Centro do Reparo')
-  return <Page><Header title="Ajustes" subtitle="Configurações simples do sistema."/><div className="panel narrow"><label>Nome no fechamento e recibo<input value={name} onChange={e=>setName(e.target.value)}/></label><button className="primary" onClick={()=>onSave({businessName:name})}>Salvar</button><hr/><h3>Aparência</h3><div className="tabs"><button className={theme==='system'?'active':''} onClick={()=>onThemeChange('system')}>Automático</button><button className={theme==='light'?'active':''} onClick={()=>onThemeChange('light')}>Claro</button><button className={theme==='dark'?'active':''} onClick={()=>onThemeChange('dark')}>Escuro</button></div><hr/><h3>Armazenamento</h3><p>{online?'Online com Supabase. Seus dados podem ser acessados em outros aparelhos usando a mesma conta.':'Local neste navegador. Ideal para teste; para uso real configure o Supabase conforme o README.'}</p></div></Page>
+  function resetAll(){
+    if(prompt('Isso apaga TODOS os lojistas, serviços e pagamentos da conta (seu login continua). Para confirmar, digite RESETAR:')==='RESETAR') onResetAll()
+  }
+  return <Page><Header title="Ajustes" subtitle="Configurações simples do sistema."/><div className="panel narrow"><label>Nome no fechamento e recibo<input value={name} onChange={e=>setName(e.target.value)}/></label><button className="primary" onClick={()=>onSave({businessName:name})}>Salvar</button><hr/><h3>Aparência</h3><div className="tabs"><button className={theme==='system'?'active':''} onClick={()=>onThemeChange('system')}>Automático</button><button className={theme==='light'?'active':''} onClick={()=>onThemeChange('light')}>Claro</button><button className={theme==='dark'?'active':''} onClick={()=>onThemeChange('dark')}>Escuro</button></div><hr/><h3>Armazenamento</h3><p>{online?'Online com Supabase. Seus dados podem ser acessados em outros aparelhos usando a mesma conta.':'Local neste navegador. Ideal para teste; para uso real configure o Supabase conforme o README.'}</p><hr/><h3>Zona de risco</h3><p>Use só em teste — apaga dados de verdade e não tem como desfazer.</p><button className="danger-outline" onClick={resetAll}><Trash2/>Resetar tudo</button></div></Page>
 }
 
 function Header({title,subtitle,action}:{title:string;subtitle:string;action?:any}){return <div className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>}
