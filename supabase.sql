@@ -20,6 +20,7 @@ create table if not exists public.services (
   device text not null,
   description text not null default '',
   amount numeric(12,2) not null check (amount > 0),
+  photo_url text,
   created_at timestamptz not null default now()
 );
 
@@ -68,3 +69,20 @@ create policy "payments_owner" on public.payments for all using (auth.uid() = us
 
 drop policy if exists "allocations_owner" on public.payment_allocations;
 create policy "allocations_owner" on public.payment_allocations for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Fotos dos aparelhos (foto opcional anexada ao lançar um serviço)
+insert into storage.buckets (id, name, public)
+values ('service-photos', 'service-photos', true)
+on conflict (id) do nothing;
+
+drop policy if exists "service_photos_insert" on storage.objects;
+create policy "service_photos_insert" on storage.objects for insert to authenticated
+  with check (bucket_id = 'service-photos' and auth.uid()::text = (storage.foldername(name))[1]);
+
+drop policy if exists "service_photos_select" on storage.objects;
+create policy "service_photos_select" on storage.objects for select
+  using (bucket_id = 'service-photos');
+
+drop policy if exists "service_photos_delete" on storage.objects;
+create policy "service_photos_delete" on storage.objects for delete to authenticated
+  using (bucket_id = 'service-photos' and auth.uid()::text = (storage.foldername(name))[1]);

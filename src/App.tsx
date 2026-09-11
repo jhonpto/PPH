@@ -7,7 +7,7 @@ import {
 import { supabase, supabaseConfigured } from './supabase'
 
 type Store = { id:string; name:string; phone:string; note:string; created_at:string }
-type Service = { id:string; store_id:string; service_date:string; device:string; description:string; amount:number; created_at:string }
+type Service = { id:string; store_id:string; service_date:string; device:string; description:string; amount:number; photo_url?:string|null; created_at:string }
 type Payment = { id:string; store_id:string; paid_at:string; amount:number; method:string; note:string; created_at:string }
 type Allocation = { id:string; payment_id:string; service_id:string; amount:number }
 type DataSet = { stores:Store[]; services:Service[]; payments:Payment[]; allocations:Allocation[] }
@@ -30,6 +30,22 @@ function loadLocal():DataSet {
   return raw ? JSON.parse(raw) : {stores:[],services:[],payments:[],allocations:[]}
 }
 function saveLocal(d:DataSet){ localStorage.setItem(localKey,JSON.stringify(d)) }
+
+async function uploadServicePhoto(file:File):Promise<string>{
+  if(!supabaseConfigured){
+    return await new Promise<string>((resolve,reject)=>{
+      const r=new FileReader()
+      r.onload=()=>resolve(r.result as string)
+      r.onerror=()=>reject(r.error)
+      r.readAsDataURL(file)
+    })
+  }
+  const {data:{user}}=await supabase.auth.getUser()
+  const path=`${user!.id}/${uid()}-${file.name}`
+  const {error}=await supabase.storage.from('service-photos').upload(path,file)
+  if(error) throw error
+  return supabase.storage.from('service-photos').getPublicUrl(path).data.publicUrl
+}
 
 export default function App(){
   const [session,setSession]=useState<any>(null)
@@ -157,7 +173,7 @@ export default function App(){
     <main className="main">
       {!supabaseConfigured && <div className="local-banner"><AlertTriangle size={18}/><span><b>Modo local:</b> pronto para testar. Configure o Supabase para sincronizar entre aparelhos.</span></div>}
       {loading?<Center><div className="loader"/></Center>:
-        view==='dashboard'?<Dashboard data={data} onOpenStore={openStore} onNewService={(id)=>{setSelectedStoreId(id);setView('store')}}/>:
+        view==='dashboard'?<Dashboard data={data} onOpenStore={openStore} onNewService={(id)=>{setSelectedStoreId(id);setView('store')}} businessName={settings.businessName}/>:
         view==='stores'?<StoresPage data={data} onOpenStore={openStore} onAdd={addStore}/>:
         view==='payments'?<PaymentsPage data={data} businessName={settings.businessName}/>:
         view==='settings'?<SettingsPage settings={settings} onSave={(s:any)=>{setSettings(s);localStorage.setItem(settingsKey,JSON.stringify(s));flash('Ajustes salvos')}} online={supabaseConfigured}/>:
@@ -205,7 +221,7 @@ function ResetPasswordScreen({onDone}:{onDone:()=>void}){
   return <Center><div className="auth-card"><div className="brand-mark big">CR</div><h1>Nova senha</h1><p>Defina uma nova senha para continuar.</p><form onSubmit={submit}><label>Nova senha<input autoFocus type="password" value={pass} minLength={6} onChange={e=>setPass(e.target.value)} required/></label><button className="primary full" disabled={busy}>{busy?'Aguarde...':'Salvar nova senha'}</button></form>{msg&&<div className="form-msg">{msg}</div>}</div></Center>
 }
 
-function Dashboard({data,onOpenStore,onNewService}:{data:DataSet;onOpenStore:(id:string)=>void;onNewService:(id:string)=>void}){
+function Dashboard({data,onOpenStore,onNewService,businessName}:{data:DataSet;onOpenStore:(id:string)=>void;onNewService:(id:string)=>void;businessName:string}){
   const [q,setQ]=useState('')
   const totals=useMemo(()=>{
     const open=data.services.reduce((s,x)=>s+serviceOutstanding(x.id,data),0)
@@ -214,10 +230,29 @@ function Dashboard({data,onOpenStore,onNewService}:{data:DataSet;onOpenStore:(id
     const old=data.services.filter(s=>serviceOutstanding(s.id,data)>0.009 && ageDays(s.service_date)>30).reduce((a,s)=>a+serviceOutstanding(s.id,data),0)
     return {open,received,debtors:debtorIds.size,old}
   },[data])
+  const reminders=useMemo(()=>{
+    const byStore=new Map<string,Service[]>()
+    data.services.forEach(s=>{
+      if(serviceOutstanding(s.id,data)>0.009 && ageDays(s.service_date)>=7){
+        const arr=byStore.get(s.store_id)||[]; arr.push(s); byStore.set(s.store_id,arr)
+      }
+    })
+    const list:{st:Store;services:Service[];total:number;days:number}[]=[]
+    byStore.forEach((services,storeId)=>{
+      const st=data.stores.find(x=>x.id===storeId)
+      if(!st) return
+      const total=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
+      const days=Math.max(...services.map(s=>ageDays(s.service_date)))
+      list.push({st,services,total,days})
+    })
+    return list.sort((a,b)=>b.days-a.days)
+  },[data])
   const rows=data.stores.map(st=>({st,open:storeOpen(st.id,data),old:storeOld(st.id,data)})).filter(x=>x.open>0.009 && x.st.name.toLowerCase().includes(q.toLowerCase())).sort((a,b)=>b.open-a.open)
   return <Page>
     <Header title="Visão geral" subtitle="Tudo que está na rua, sem precisar somar nada."/>
     <div className="metric-grid"><Metric label="Em aberto" value={money(totals.open)} strong/><Metric label="Recebido no mês" value={money(totals.received)}/><Metric label="Lojistas devendo" value={String(totals.debtors)}/><Metric label="+30 dias" value={money(totals.old)} warn={totals.old>0}/></div>
+    {reminders.length>0&&<><div className="section-head"><div><h2>Lembretes de cobrança</h2><p>Serviços em aberto há 7 dias ou mais.</p></div></div>
+    <div className="list-card">{reminders.map(r=><div className="debtor-row" key={r.st.id}><div className="avatar">{r.st.name.slice(0,2).toUpperCase()}</div><div className="grow"><b>{r.st.name}</b><span>{money(r.total)} · há {r.days} dias</span></div><button className="whatsapp" disabled={!r.st.phone} onClick={()=>window.open(`https://wa.me/${normalizePhone(r.st.phone)}?text=${encodeURIComponent(buildReminderText(businessName,r.st,r.services,data))}`,'_blank')}><MessageCircle size={17}/>Lembrar</button></div>)}</div></>}
     <div className="section-head"><div><h2>Quem está devendo</h2><p>Ordenado pelo maior saldo em aberto.</p></div></div>
     <SearchBox value={q} onChange={setQ} placeholder="Buscar lojista"/>
     <div className="list-card">{rows.length?rows.map(({st,open,old})=><button className="debtor-row" key={st.id} onClick={()=>onOpenStore(st.id)}><div className="avatar">{st.name.slice(0,2).toUpperCase()}</div><div className="grow"><b>{st.name}</b><span>{old>0?`${money(old)} há mais de 30 dias`:'Sem atrasos acima de 30 dias'}</span></div><div className="row-money"><b>{money(open)}</b><ChevronRight/></div></button>):<Empty title="Nada em aberto" text="Quando lançar serviços para um lojista, eles aparecerão aqui."/>}</div>
@@ -246,7 +281,7 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onD
     <div className="action-strip"><button onClick={()=>setStatement(true)}><FileText/>Fechamento / cobrança</button>{selected.length>0&&<button className="receive" onClick={()=>setPaymentModal(true)}><Banknote/>Receber {money(selectedTotal)}</button>}</div>
     <div className="tabs"><button className={tab==='open'?'active':''} onClick={()=>{setTab('open');setSelected([])}}>Em aberto</button><button className={tab==='paid'?'active':''} onClick={()=>{setTab('paid');setSelected([])}}>Pagos</button><button className={tab==='all'?'active':''} onClick={()=>{setTab('all');setSelected([])}}>Todos</button></div>
     {tab==='open'&&visible.length>0&&<label className="select-all"><input type="checkbox" checked={openIds.length>0&&openIds.every(id=>selected.includes(id))} onChange={e=>setSelected(e.target.checked?openIds:[])}/> Selecionar todos em aberto</label>}
-    <div className="service-list">{visible.map(s=>{const out=serviceOutstanding(s.id,data); const paid=s.amount-out; return <div className={'service-row '+(out<=0.009?'paid':'')} key={s.id}>{out>0.009?<input className="check" type="checkbox" checked={selected.includes(s.id)} onChange={()=>toggle(s.id)}/>:<div className="paid-check"><Check/></div>}<div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div><div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?'Pago':out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>{out>0.009&&servicePaid(s.id,data)<=0.009&&<button className="icon danger" title="Excluir" onClick={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}><Trash2/></button>}</div>})}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Esse lojista está em dia.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
+    <div className="service-list">{visible.map(s=>{const out=serviceOutstanding(s.id,data); const paid=s.amount-out; return <div className={'service-row '+(out<=0.009?'paid':'')} key={s.id}>{out>0.009?<input className="check" type="checkbox" checked={selected.includes(s.id)} onChange={()=>toggle(s.id)}/>:<div className="paid-check"><Check/></div>}{s.photo_url&&<a href={s.photo_url} target="_blank" rel="noreferrer"><img className="service-photo" src={s.photo_url} alt=""/></a>}<div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div><div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?'Pago':out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>{out>0.009&&servicePaid(s.id,data)<=0.009&&<button className="icon danger" title="Excluir" onClick={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}><Trash2/></button>}</div>})}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Esse lojista está em dia.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
     {serviceModal&&<ServiceModal storeId={store.id} onClose={()=>setServiceModal(false)} onSave={async p=>{await onAddService(p);setServiceModal(false)}}/>}
     {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note)=>{await onPayment(store.id,selected,amount,method,note);setSelected([]);setPaymentModal(false)}}/>}
     {statement&&<StatementModal store={store} data={data} businessName={businessName} onClose={()=>setStatement(false)}/>}
@@ -279,8 +314,20 @@ function StoreModal({initial,onClose,onSave}:{initial?:{name:string;phone:string
 }
 
 function ServiceModal({storeId,onClose,onSave}:{storeId:string;onClose:()=>void;onSave:(p:any)=>Promise<void>}){
-  const [device,setDevice]=useState(''); const [description,setDescription]=useState(''); const [amount,setAmount]=useState(''); const [date,setDate]=useState(today()); const [busy,setBusy]=useState(false)
-  return <Modal title="Novo serviço" onClose={onClose}><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave({store_id:storeId,service_date:date,device,description,amount:unmaskMoney(amount)})}finally{setBusy(false)}}}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>Salvar serviço</button></div></form></Modal>
+  const [device,setDevice]=useState(''); const [description,setDescription]=useState(''); const [amount,setAmount]=useState(''); const [date,setDate]=useState(today()); const [photoFile,setPhotoFile]=useState<File|null>(null); const [photoPreview,setPhotoPreview]=useState(''); const [busy,setBusy]=useState(false)
+  function pickPhoto(f:File|undefined){
+    if(!f) return
+    setPhotoFile(f)
+    const r=new FileReader(); r.onload=()=>setPhotoPreview(r.result as string); r.readAsDataURL(f)
+  }
+  async function submit(e:any){
+    e.preventDefault();setBusy(true)
+    try{
+      const photo_url=photoFile?await uploadServicePhoto(photoFile):undefined
+      await onSave({store_id:storeId,service_date:date,device,description,amount:unmaskMoney(amount),...(photo_url?{photo_url}:{})})
+    } finally { setBusy(false) }
+  }
+  return <Modal title="Novo serviço" onClose={onClose}><form onSubmit={submit}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><label>Foto do aparelho (opcional){photoPreview?<img className="photo-preview" src={photoPreview} alt=""/>:null}<input type="file" accept="image/*" capture="environment" onChange={e=>pickPhoto(e.target.files?.[0])}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando...':'Salvar serviço'}</button></div></form></Modal>
 }
 
 function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSave:(amount:number,method:string,note:string)=>Promise<void>}){
@@ -314,3 +361,4 @@ function ageDays(date:string){return Math.floor((Date.now()-new Date(date+'T12:0
 function storeOld(storeId:string,data:DataSet){return data.services.filter(s=>s.store_id===storeId&&ageDays(s.service_date)>30).reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)}
 function normalizePhone(p:string){let d=digits(p); if(d && !d.startsWith('55')) d='55'+d; return d}
 function buildStatementText(businessName:string,store:Store,services:Service[],data:DataSet,start:string,end:string){const body=services.map(s=>`${dateBR(s.service_date)} - ${s.device}${s.description?' - '+s.description:''} - ${money(serviceOutstanding(s.id,data))}`).join('\n');const total=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0);return `${businessName}\n\nOlá! Segue seu fechamento:\n\n${body||'Nenhum serviço em aberto no período.'}\n\nTotal em aberto: ${money(total)}\nPeríodo: ${dateBR(start)} a ${dateBR(end)}`}
+function buildReminderText(businessName:string,store:Store,services:Service[],data:DataSet){const body=services.map(s=>`${dateBR(s.service_date)} - ${s.device}${s.description?' - '+s.description:''} - ${money(serviceOutstanding(s.id,data))}`).join('\n');const total=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0);return `${businessName}\n\nOlá, ${store.name}! Passando para lembrar do(s) serviço(s) em aberto:\n\n${body}\n\nTotal: ${money(total)}\n\nQualquer dúvida, é só chamar!`}
