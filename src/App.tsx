@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle, ArrowLeft, Banknote, Check, ChevronRight, ClipboardCopy,
-  CreditCard, Download, FileText, Home, LogOut, MessageCircle, Pencil, Plus,
+  CreditCard, Download, FileText, Home, LogOut, MessageCircle, Mic, Pencil, Plus,
   ReceiptText, Search, Settings, Store as StoreIcon, Trash2, Users, X
 } from 'lucide-react'
 import { supabase, supabaseConfigured } from './supabase'
@@ -51,6 +51,16 @@ async function uploadServicePhoto(file:File):Promise<string>{
   const {error}=await supabase.storage.from('service-photos').upload(path,file)
   if(error) throw error
   return supabase.storage.from('service-photos').getPublicUrl(path).data.publicUrl
+}
+
+async function transcribeVoiceService(blob:Blob):Promise<{transcript:string;device:string;description:string;amount:number}>{
+  const ext=blob.type.includes('mp4')?'mp4':blob.type.includes('ogg')?'ogg':'webm'
+  const form=new FormData()
+  form.append('audio',blob,`audio.${ext}`)
+  const {data,error}=await supabase.functions.invoke('voice-service',{body:form})
+  if(error) throw error
+  if(data?.error) throw new Error(data.error)
+  return data
 }
 
 export default function App(){
@@ -387,11 +397,41 @@ function StoreModal({initial,onClose,onSave}:{initial?:{name:string;phone:string
 
 function ServiceModal({storeId,initial,onClose,onSave}:{storeId:string;initial?:Service;onClose:()=>void;onSave:(p:any)=>Promise<void>}){
   const [device,setDevice]=useState(initial?.device||''); const [description,setDescription]=useState(initial?.description||''); const [amount,setAmount]=useState(initial?moneyMaskFromNumber(initial.amount):''); const [date,setDate]=useState(initial?.service_date||today()); const [photoFile,setPhotoFile]=useState<File|null>(null); const [photoPreview,setPhotoPreview]=useState(initial?.photo_url||''); const [busy,setBusy]=useState(false)
+  const [recState,setRecState]=useState<'idle'|'recording'|'processing'>('idle')
+  const [voiceMsg,setVoiceMsg]=useState('')
+  const mediaRef=useRef<MediaRecorder|null>(null)
+  const chunksRef=useRef<Blob[]>([])
   function pickPhoto(f:File|undefined){
     if(!f) return
     setPhotoFile(f)
     const r=new FileReader(); r.onload=()=>setPhotoPreview(r.result as string); r.readAsDataURL(f)
   }
+  async function startRecording(){
+    setVoiceMsg('')
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true})
+      const rec=new MediaRecorder(stream)
+      chunksRef.current=[]
+      rec.ondataavailable=e=>{ if(e.data.size>0) chunksRef.current.push(e.data) }
+      rec.onstop=async()=>{
+        stream.getTracks().forEach(t=>t.stop())
+        setRecState('processing')
+        try{
+          const blob=new Blob(chunksRef.current,{type:rec.mimeType||'audio/webm'})
+          const result=await transcribeVoiceService(blob)
+          if(result.device) setDevice(result.device)
+          if(result.description) setDescription(result.description)
+          if(result.amount) setAmount(moneyMaskFromNumber(result.amount))
+          setVoiceMsg(result.transcript?`Entendi: "${result.transcript}". Confira os campos antes de salvar.`:'Não consegui entender direito, revise os campos.')
+        } catch(err:any){ setVoiceMsg('Erro ao processar áudio: '+err.message) }
+        finally { setRecState('idle') }
+      }
+      mediaRef.current=rec
+      rec.start()
+      setRecState('recording')
+    } catch{ setVoiceMsg('Não consegui acessar o microfone. Verifique a permissão.') }
+  }
+  function stopRecording(){ mediaRef.current?.stop() }
   async function submit(e:any){
     e.preventDefault();setBusy(true)
     try{
@@ -399,7 +439,9 @@ function ServiceModal({storeId,initial,onClose,onSave}:{storeId:string;initial?:
       await onSave({store_id:storeId,service_date:date,device,description,amount:unmaskMoney(amount),...(photo_url?{photo_url}:{})})
     } finally { setBusy(false) }
   }
-  return <Modal title={initial?'Editar serviço':'Novo serviço'} onClose={onClose}><form onSubmit={submit}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><label>Foto do aparelho (opcional){photoPreview?<img className="photo-preview" src={photoPreview} alt=""/>:null}<input type="file" accept="image/*" capture="environment" onChange={e=>pickPhoto(e.target.files?.[0])}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando...':initial?'Salvar':'Salvar serviço'}</button></div></form></Modal>
+  return <Modal title={initial?'Editar serviço':'Novo serviço'} onClose={onClose}><form onSubmit={submit}>
+    {supabaseConfigured&&<div className="voice-box"><button type="button" className={'voice-btn'+(recState==='recording'?' recording':'')} disabled={recState==='processing'} onClick={recState==='recording'?stopRecording:startRecording}><Mic size={18}/>{recState==='recording'?'Gravando... toque para parar':recState==='processing'?'Processando áudio...':'Preencher por voz'}</button>{voiceMsg&&<p className="voice-msg">{voiceMsg}</p>}</div>}
+    <div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><label>Foto do aparelho (opcional){photoPreview?<img className="photo-preview" src={photoPreview} alt=""/>:null}<input type="file" accept="image/*" capture="environment" onChange={e=>pickPhoto(e.target.files?.[0])}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando...':initial?'Salvar':'Salvar serviço'}</button></div></form></Modal>
 }
 
 function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSave:(amount:number,method:string,note:string)=>Promise<void>}){
