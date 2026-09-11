@@ -24,6 +24,12 @@ const unmaskMoney = (s:string) => Number(s.replace(/\./g,'').replace(',','.')) |
 const moneyMaskFromNumber = (n:number) => maskMoney(Math.round(n*100).toString())
 const localKey='centro-contas-v1'
 const settingsKey='centro-contas-settings'
+const themeKey='centro-contas-theme'
+
+function applyTheme(t:string){
+  if(t==='light'||t==='dark') document.documentElement.setAttribute('data-theme',t)
+  else document.documentElement.removeAttribute('data-theme')
+}
 
 function loadLocal():DataSet {
   const raw=localStorage.getItem(localKey)
@@ -57,6 +63,10 @@ export default function App(){
   const [toast,setToast]=useState('')
   const [recovery,setRecovery]=useState(false)
   const [settings,setSettings]=useState(()=>JSON.parse(localStorage.getItem(settingsKey)||'{"businessName":"Centro do Reparo"}'))
+  const [theme,setThemeState]=useState(()=>localStorage.getItem(themeKey)||'system')
+
+  useEffect(()=>{ applyTheme(theme) },[theme])
+  function setTheme(t:string){ localStorage.setItem(themeKey,t); setThemeState(t) }
 
   useEffect(()=>{
     if(!supabaseConfigured){ setData(loadLocal()); setLoading(false); setAuthLoading(false); return }
@@ -109,6 +119,13 @@ export default function App(){
       const {error}=await supabase.from('services').insert(payload); if(error) throw error; await refresh()
     } else mutateLocal(d=>({...d,services:[{id:uid(),...payload,created_at:new Date().toISOString()},...d.services]}))
     flash('Serviço lançado')
+  }
+
+  async function updateService(id:string, payload:{service_date:string;device:string;description:string;amount:number;photo_url?:string}){
+    if(supabaseConfigured){
+      const {error}=await supabase.from('services').update(payload).eq('id',id); if(error) throw error; await refresh()
+    } else mutateLocal(d=>({...d,services:d.services.map(s=>s.id===id?{...s,...payload}:s)}))
+    flash('Serviço atualizado')
   }
 
   async function deleteService(id:string){
@@ -176,8 +193,8 @@ export default function App(){
         view==='dashboard'?<Dashboard data={data} onOpenStore={openStore} onNewService={(id)=>{setSelectedStoreId(id);setView('store')}} businessName={settings.businessName}/>:
         view==='stores'?<StoresPage data={data} onOpenStore={openStore} onAdd={addStore}/>:
         view==='payments'?<PaymentsPage data={data} businessName={settings.businessName}/>:
-        view==='settings'?<SettingsPage settings={settings} onSave={(s:any)=>{setSettings(s);localStorage.setItem(settingsKey,JSON.stringify(s));flash('Ajustes salvos')}} online={supabaseConfigured}/>:
-        store?<StorePage store={store} data={data} onBack={()=>setView('stores')} onAddService={addService} onDeleteService={deleteService} onPayment={recordPayment} onDeleteStore={deleteStore} onUpdateStore={updateStore} businessName={settings.businessName}/>:null}
+        view==='settings'?<SettingsPage settings={settings} onSave={(s:any)=>{setSettings(s);localStorage.setItem(settingsKey,JSON.stringify(s));flash('Ajustes salvos')}} online={supabaseConfigured} theme={theme} onThemeChange={setTheme}/>:
+        store?<StorePage store={store} data={data} onBack={()=>setView('stores')} onAddService={addService} onDeleteService={deleteService} onUpdateService={updateService} onPayment={recordPayment} onDeleteStore={deleteStore} onUpdateStore={updateStore} businessName={settings.businessName}/>:null}
     </main>
 
     <nav className="bottom-nav">
@@ -251,6 +268,7 @@ function Dashboard({data,onOpenStore,onNewService,businessName}:{data:DataSet;on
   return <Page>
     <Header title="Visão geral" subtitle="Tudo que está na rua, sem precisar somar nada."/>
     <div className="metric-grid"><Metric label="Em aberto" value={money(totals.open)} strong/><Metric label="Recebido no mês" value={money(totals.received)}/><Metric label="Lojistas devendo" value={String(totals.debtors)}/><Metric label="+30 dias" value={money(totals.old)} warn={totals.old>0}/></div>
+    <MonthlyChart data={data}/>
     {reminders.length>0&&<><div className="section-head"><div><h2>Lembretes de cobrança</h2><p>Serviços em aberto há 7 dias ou mais.</p></div></div>
     <div className="list-card">{reminders.map(r=><div className="debtor-row" key={r.st.id}><div className="avatar">{r.st.name.slice(0,2).toUpperCase()}</div><div className="grow"><b>{r.st.name}</b><span>{money(r.total)} · há {r.days} dias</span></div><button className="whatsapp" disabled={!r.st.phone} onClick={()=>window.open(`https://wa.me/${normalizePhone(r.st.phone)}?text=${encodeURIComponent(buildReminderText(businessName,r.st,r.services,data))}`,'_blank')}><MessageCircle size={17}/>Lembrar</button></div>)}</div></>}
     <div className="section-head"><div><h2>Quem está devendo</h2><p>Ordenado pelo maior saldo em aberto.</p></div></div>
@@ -259,14 +277,43 @@ function Dashboard({data,onOpenStore,onNewService,businessName}:{data:DataSet;on
   </Page>
 }
 
+function MonthlyChart({data}:{data:DataSet}){
+  const [hover,setHover]=useState<number|null>(null)
+  const months=useMemo(()=>{
+    const now=new Date()
+    const arr:{key:string;label:string;total:number}[]=[]
+    for(let i=5;i>=0;i--){
+      const d=new Date(now.getFullYear(),now.getMonth()-i,1)
+      const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+      const label=d.toLocaleDateString('pt-BR',{month:'short'}).replace('.','')
+      arr.push({key,label,total:0})
+    }
+    data.payments.forEach(p=>{
+      const key=p.paid_at.slice(0,7)
+      const m=arr.find(x=>x.key===key)
+      if(m) m.total+=p.amount
+    })
+    return arr
+  },[data])
+  const max=Math.max(1,...months.map(m=>m.total))
+  return <div className="chart-card">
+    <div className="section-head"><div><h2>Recebido por mês</h2><p>Últimos 6 meses.</p></div></div>
+    <div className="bar-chart">{months.map((m,i)=><div className="bar-col" key={m.key} onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)} onTouchStart={()=>setHover(i)}>
+      {hover===i&&<div className="bar-tooltip">{money(m.total)}</div>}
+      <div className="bar-track"><div className="bar-fill" style={{height:(m.total/max*100)+'%'}}/></div>
+      <span className="bar-label">{m.label}</span>
+    </div>)}</div>
+  </div>
+}
+
 function StoresPage({data,onOpenStore,onAdd}:{data:DataSet;onOpenStore:(id:string)=>void;onAdd:(p:any)=>Promise<void>}){
   const [modal,setModal]=useState(false); const [q,setQ]=useState('')
   const stores=data.stores.filter(s=>s.name.toLowerCase().includes(q.toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name))
   return <Page><Header title="Lojistas" subtitle={`${data.stores.length} cadastrados`} action={<button className="primary" onClick={()=>setModal(true)}><Plus/>Novo lojista</button>}/><SearchBox value={q} onChange={setQ} placeholder="Buscar por nome"/><div className="list-card">{stores.map(st=><button className="debtor-row" key={st.id} onClick={()=>onOpenStore(st.id)}><div className="avatar"><StoreIcon/></div><div className="grow"><b>{st.name}</b><span>{st.phone||'Sem telefone'}</span></div><div className="row-money"><b className={storeOpen(st.id,data)>0?'danger-text':''}>{money(storeOpen(st.id,data))}</b><span>em aberto</span></div><ChevronRight/></button>)}{!stores.length&&<Empty title="Nenhum lojista" text="Cadastre seu primeiro lojista para começar."/>}</div>{modal&&<StoreModal onClose={()=>setModal(false)} onSave={async p=>{await onAdd(p);setModal(false)}}/>}</Page>
 }
 
-function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onDeleteStore,onUpdateStore,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;businessName:string}){
-  const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [editModal,setEditModal]=useState(false); const [selected,setSelected]=useState<string[]>([])
+function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateService,onPayment,onDeleteStore,onUpdateStore,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onUpdateService:(id:string,p:any)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;businessName:string}){
+  const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [editingService,setEditingService]=useState<Service|null>(null); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [editModal,setEditModal]=useState(false); const [selected,setSelected]=useState<string[]>([])
   const services=data.services.filter(s=>s.store_id===store.id).sort((a,b)=>b.service_date.localeCompare(a.service_date))
   const visible=services.filter(s=>tab==='all'?true:tab==='open'?serviceOutstanding(s.id,data)>0.009:serviceOutstanding(s.id,data)<=0.009)
   const selectedTotal=selected.reduce((sum,id)=>sum+serviceOutstanding(id,data),0)
@@ -281,8 +328,9 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onPayment,onD
     <div className="action-strip"><button onClick={()=>setStatement(true)}><FileText/>Fechamento / cobrança</button>{selected.length>0&&<button className="receive" onClick={()=>setPaymentModal(true)}><Banknote/>Receber {money(selectedTotal)}</button>}</div>
     <div className="tabs"><button className={tab==='open'?'active':''} onClick={()=>{setTab('open');setSelected([])}}>Em aberto</button><button className={tab==='paid'?'active':''} onClick={()=>{setTab('paid');setSelected([])}}>Pagos</button><button className={tab==='all'?'active':''} onClick={()=>{setTab('all');setSelected([])}}>Todos</button></div>
     {tab==='open'&&visible.length>0&&<label className="select-all"><input type="checkbox" checked={openIds.length>0&&openIds.every(id=>selected.includes(id))} onChange={e=>setSelected(e.target.checked?openIds:[])}/> Selecionar todos em aberto</label>}
-    <div className="service-list">{visible.map(s=>{const out=serviceOutstanding(s.id,data); const paid=s.amount-out; return <div className={'service-row '+(out<=0.009?'paid':'')} key={s.id}>{out>0.009?<input className="check" type="checkbox" checked={selected.includes(s.id)} onChange={()=>toggle(s.id)}/>:<div className="paid-check"><Check/></div>}{s.photo_url&&<a href={s.photo_url} target="_blank" rel="noreferrer"><img className="service-photo" src={s.photo_url} alt=""/></a>}<div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div><div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?'Pago':out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>{out>0.009&&servicePaid(s.id,data)<=0.009&&<button className="icon danger" title="Excluir" onClick={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}><Trash2/></button>}</div>})}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Esse lojista está em dia.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
+    <div className="service-list">{visible.map(s=>{const out=serviceOutstanding(s.id,data); const paid=s.amount-out; return <div className={'service-row '+(out<=0.009?'paid':'')} key={s.id}>{out>0.009?<input className="check" type="checkbox" checked={selected.includes(s.id)} onChange={()=>toggle(s.id)}/>:<div className="paid-check"><Check/></div>}{s.photo_url&&<a href={s.photo_url} target="_blank" rel="noreferrer"><img className="service-photo" src={s.photo_url} alt=""/></a>}<div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div><div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?'Pago':out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>{out>0.009&&servicePaid(s.id,data)<=0.009&&<><button className="icon" title="Editar" onClick={()=>setEditingService(s)}><Pencil/></button><button className="icon danger" title="Excluir" onClick={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}><Trash2/></button></>}</div>})}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Esse lojista está em dia.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
     {serviceModal&&<ServiceModal storeId={store.id} onClose={()=>setServiceModal(false)} onSave={async p=>{await onAddService(p);setServiceModal(false)}}/>}
+    {editingService&&<ServiceModal storeId={store.id} initial={editingService} onClose={()=>setEditingService(null)} onSave={async p=>{await onUpdateService(editingService.id,p);setEditingService(null)}}/>}
     {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note)=>{await onPayment(store.id,selected,amount,method,note);setSelected([]);setPaymentModal(false)}}/>}
     {statement&&<StatementModal store={store} data={data} businessName={businessName} onClose={()=>setStatement(false)}/>}
     {editModal&&<StoreModal initial={store} onClose={()=>setEditModal(false)} onSave={async p=>{await onUpdateStore(store.id,p);setEditModal(false)}}/>}
@@ -295,9 +343,9 @@ function PaymentsPage({data,businessName}:{data:DataSet;businessName:string}){
   return <Page><Header title="Pagamentos" subtitle="Histórico de tudo que entrou."/><div className="list-card">{data.payments.map(p=>{const st=data.stores.find(s=>s.id===p.store_id); const qty=data.allocations.filter(a=>a.payment_id===p.id).length; return <button className="debtor-row" onClick={()=>setReceipt(p)} key={p.id}><div className="avatar"><CreditCard/></div><div className="grow"><b>{st?.name||'Lojista removido'}</b><span>{dateBR(p.paid_at)} · {qty} serviço(s) · {p.method||'Não informado'}</span></div><div className="row-money success"><b>{money(p.amount)}</b><ChevronRight/></div></button>})}{!data.payments.length&&<Empty title="Nenhum pagamento ainda" text="As baixas realizadas aparecerão aqui."/>}</div>{receipt&&<ReceiptModal payment={receipt} data={data} businessName={businessName} onClose={()=>setReceipt(null)}/>}</Page>
 }
 
-function SettingsPage({settings,onSave,online}:{settings:any;onSave:(s:any)=>void;online:boolean}){
+function SettingsPage({settings,onSave,online,theme,onThemeChange}:{settings:any;onSave:(s:any)=>void;online:boolean;theme:string;onThemeChange:(t:string)=>void}){
   const [name,setName]=useState(settings.businessName||'Centro do Reparo')
-  return <Page><Header title="Ajustes" subtitle="Configurações simples do sistema."/><div className="panel narrow"><label>Nome no fechamento e recibo<input value={name} onChange={e=>setName(e.target.value)}/></label><button className="primary" onClick={()=>onSave({businessName:name})}>Salvar</button><hr/><h3>Armazenamento</h3><p>{online?'Online com Supabase. Seus dados podem ser acessados em outros aparelhos usando a mesma conta.':'Local neste navegador. Ideal para teste; para uso real configure o Supabase conforme o README.'}</p></div></Page>
+  return <Page><Header title="Ajustes" subtitle="Configurações simples do sistema."/><div className="panel narrow"><label>Nome no fechamento e recibo<input value={name} onChange={e=>setName(e.target.value)}/></label><button className="primary" onClick={()=>onSave({businessName:name})}>Salvar</button><hr/><h3>Aparência</h3><div className="tabs"><button className={theme==='system'?'active':''} onClick={()=>onThemeChange('system')}>Automático</button><button className={theme==='light'?'active':''} onClick={()=>onThemeChange('light')}>Claro</button><button className={theme==='dark'?'active':''} onClick={()=>onThemeChange('dark')}>Escuro</button></div><hr/><h3>Armazenamento</h3><p>{online?'Online com Supabase. Seus dados podem ser acessados em outros aparelhos usando a mesma conta.':'Local neste navegador. Ideal para teste; para uso real configure o Supabase conforme o README.'}</p></div></Page>
 }
 
 function Header({title,subtitle,action}:{title:string;subtitle:string;action?:any}){return <div className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>}
@@ -313,8 +361,8 @@ function StoreModal({initial,onClose,onSave}:{initial?:{name:string;phone:string
   return <Modal title={initial?'Editar lojista':'Novo lojista'} onClose={onClose}><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave({name,phone,note})}finally{setBusy(false)}}}><label>Nome do lojista / loja<input autoFocus value={name} onChange={e=>setName(e.target.value)} required/></label><label>WhatsApp<input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(75) 99999-9999"/></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{initial?'Salvar':'Cadastrar'}</button></div></form></Modal>
 }
 
-function ServiceModal({storeId,onClose,onSave}:{storeId:string;onClose:()=>void;onSave:(p:any)=>Promise<void>}){
-  const [device,setDevice]=useState(''); const [description,setDescription]=useState(''); const [amount,setAmount]=useState(''); const [date,setDate]=useState(today()); const [photoFile,setPhotoFile]=useState<File|null>(null); const [photoPreview,setPhotoPreview]=useState(''); const [busy,setBusy]=useState(false)
+function ServiceModal({storeId,initial,onClose,onSave}:{storeId:string;initial?:Service;onClose:()=>void;onSave:(p:any)=>Promise<void>}){
+  const [device,setDevice]=useState(initial?.device||''); const [description,setDescription]=useState(initial?.description||''); const [amount,setAmount]=useState(initial?moneyMaskFromNumber(initial.amount):''); const [date,setDate]=useState(initial?.service_date||today()); const [photoFile,setPhotoFile]=useState<File|null>(null); const [photoPreview,setPhotoPreview]=useState(initial?.photo_url||''); const [busy,setBusy]=useState(false)
   function pickPhoto(f:File|undefined){
     if(!f) return
     setPhotoFile(f)
@@ -323,11 +371,11 @@ function ServiceModal({storeId,onClose,onSave}:{storeId:string;onClose:()=>void;
   async function submit(e:any){
     e.preventDefault();setBusy(true)
     try{
-      const photo_url=photoFile?await uploadServicePhoto(photoFile):undefined
+      const photo_url=photoFile?await uploadServicePhoto(photoFile):(initial?.photo_url||undefined)
       await onSave({store_id:storeId,service_date:date,device,description,amount:unmaskMoney(amount),...(photo_url?{photo_url}:{})})
     } finally { setBusy(false) }
   }
-  return <Modal title="Novo serviço" onClose={onClose}><form onSubmit={submit}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><label>Foto do aparelho (opcional){photoPreview?<img className="photo-preview" src={photoPreview} alt=""/>:null}<input type="file" accept="image/*" capture="environment" onChange={e=>pickPhoto(e.target.files?.[0])}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando...':'Salvar serviço'}</button></div></form></Modal>
+  return <Modal title={initial?'Editar serviço':'Novo serviço'} onClose={onClose}><form onSubmit={submit}><div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label><label>Foto do aparelho (opcional){photoPreview?<img className="photo-preview" src={photoPreview} alt=""/>:null}<input type="file" accept="image/*" capture="environment" onChange={e=>pickPhoto(e.target.files?.[0])}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando...':initial?'Salvar':'Salvar serviço'}</button></div></form></Modal>
 }
 
 function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSave:(amount:number,method:string,note:string)=>Promise<void>}){
