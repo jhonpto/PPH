@@ -272,16 +272,19 @@ function ResetPasswordScreen({onDone}:{onDone:()=>void}){
 
 function Dashboard({data,onOpenStore,onNewService,businessName}:{data:DataSet;onOpenStore:(id:string)=>void;onNewService:(id:string)=>void;businessName:string}){
   const [q,setQ]=useState('')
+  const [period,setPeriod]=useState(initialPeriod)
+  const range=periodRange(period)
+  const scoped={...data,services:data.services.filter(s=>inPeriod(s.service_date,range)),payments:data.payments.filter(p=>inPeriod(p.paid_at,range))}
   const totals=useMemo(()=>{
-    const open=data.services.reduce((s,x)=>s+serviceOutstanding(x.id,data),0)
-    const received=data.payments.filter(p=>p.paid_at>=monthStart()).reduce((s,p)=>s+p.amount,0)
-    const debtorIds=new Set(data.services.filter(s=>serviceOutstanding(s.id,data)>0.009).map(s=>s.store_id))
-    const old=data.services.filter(s=>serviceOutstanding(s.id,data)>0.009 && ageDays(s.service_date)>30).reduce((a,s)=>a+serviceOutstanding(s.id,data),0)
-    return {open,received,debtors:debtorIds.size,old}
-  },[data])
+    const open=scoped.services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
+    const received=scoped.payments.reduce((sum,p)=>sum+p.amount,0)
+    const debtors=new Set(scoped.services.filter(s=>serviceOutstanding(s.id,data)>0.009).map(s=>s.store_id)).size
+    const old=scoped.services.filter(s=>ageDays(s.service_date)>30).reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
+    return {open,received,debtors,old}
+  },[data,period])
   const reminders=useMemo(()=>{
     const byStore=new Map<string,Service[]>()
-    data.services.forEach(s=>{
+    scoped.services.forEach(s=>{
       if(serviceOutstanding(s.id,data)>0.009 && ageDays(s.service_date)>=7){
         const arr=byStore.get(s.store_id)||[]; arr.push(s); byStore.set(s.store_id,arr)
       }
@@ -295,12 +298,13 @@ function Dashboard({data,onOpenStore,onNewService,businessName}:{data:DataSet;on
       list.push({st,services,total,days})
     })
     return list.sort((a,b)=>b.days-a.days)
-  },[data])
-  const rows=data.stores.map(st=>({st,open:storeOpen(st.id,data),old:storeOld(st.id,data)})).filter(x=>x.open>0.009 && x.st.name.toLowerCase().includes(q.toLowerCase())).sort((a,b)=>b.open-a.open)
+  },[data,period])
+  const rows=data.stores.map(st=>({st,open:storeOpen(st.id,scoped),old:storeOld(st.id,scoped)})).filter(x=>x.open>0.009 && x.st.name.toLowerCase().includes(q.toLowerCase())).sort((a,b)=>b.open-a.open)
   return <Page>
     <Header title="Visão geral" subtitle="Tudo que está na rua, sem precisar somar nada."/>
-    <div className="metric-grid"><Metric label="Em aberto" value={money(totals.open)} strong/><Metric label="Recebido no mês" value={money(totals.received)}/><Metric label="Lojistas devendo" value={String(totals.debtors)}/><Metric label="+30 dias" value={money(totals.old)} warn={totals.old>0}/></div>
-    <MonthlyChart data={data}/>
+    <PeriodFilter value={period} onChange={setPeriod}/>
+    <div className="metric-grid"><Metric label="Em aberto" value={money(totals.open)} strong/><Metric label={period.mode==='all'?'Recebido no período geral':'Recebido no período'} value={money(totals.received)}/><Metric label="Lojistas devendo" value={String(totals.debtors)}/><Metric label="+30 dias" value={money(totals.old)} warn={totals.old>0}/></div>
+    {period.mode==='all'?<MonthlyChart data={data}/>:<PeriodActivity services={scoped.services} payments={scoped.payments} data={data}/>}
     {reminders.length>0&&<><div className="section-head"><div><h2>Lembretes de cobrança</h2><p>Serviços em aberto há 7 dias ou mais.</p></div></div>
     <div className="list-card">{reminders.map(r=><div className="debtor-row" key={r.st.id}><div className="avatar">{r.st.name.slice(0,2).toUpperCase()}</div><div className="grow"><b>{r.st.name}</b><span>{money(r.total)} · há {r.days} dias</span></div><button className="whatsapp" disabled={!r.st.phone} onClick={()=>window.open(`https://wa.me/${normalizePhone(r.st.phone)}?text=${encodeURIComponent(buildReminderText(businessName,r.st,r.services,data))}`,'_blank')}><MessageCircle size={17}/>Lembrar</button></div>)}</div></>}
     <div className="section-head"><div><h2>Quem está devendo</h2><p>Ordenado pelo maior saldo em aberto.</p></div></div>
@@ -346,12 +350,17 @@ function StoresPage({data,onOpenStore,onAdd}:{data:DataSet;onOpenStore:(id:strin
 
 function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateService,onPayment,onDeleteStore,onUpdateStore,onResetHistory,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any,quantity?:number)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onUpdateService:(id:string,p:any)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;onResetHistory:(id:string)=>Promise<void>;businessName:string}){
   const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [editingService,setEditingService]=useState<Service|null>(null); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [editModal,setEditModal]=useState(false); const [selected,setSelected]=useState<string[]>([]); const [expandedGroups,setExpandedGroups]=useState<Set<string>>(new Set())
-  const services=data.services.filter(s=>s.store_id===store.id).sort((a,b)=>b.service_date.localeCompare(a.service_date))
+  const [period,setPeriod]=useState(initialPeriod)
+  const range=periodRange(period)
+  const changePeriod=(next:Period)=>{setPeriod(next);setSelected([]);setExpandedGroups(new Set())}
+  const payments=data.payments.filter(p=>p.store_id===store.id&&inPeriod(p.paid_at,range))
+  const services=data.services.filter(s=>s.store_id===store.id&&inPeriod(s.service_date,range)).sort((a,b)=>b.service_date.localeCompare(a.service_date))
   const visible=services.filter(s=>tab==='all'?true:tab==='open'?serviceOutstanding(s.id,data)>0.009:serviceOutstanding(s.id,data)<=0.009)
   const groups=groupServices(visible)
   const selectedTotal=selected.reduce((sum,id)=>sum+serviceOutstanding(id,data),0)
-  const paidTotal=data.payments.filter(p=>p.store_id===store.id).reduce((s,p)=>s+p.amount,0)
-  const open=storeOpen(store.id,data)
+  const paidTotal=payments.reduce((s,p)=>s+p.amount,0)
+  const open=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
+  const old=services.filter(s=>ageDays(s.service_date)>30).reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
   const toggle=(id:string)=>setSelected(x=>x.includes(id)?x.filter(i=>i!==id):[...x,id])
   const toggleGroup=(ids:string[])=>setSelected(x=>ids.every(id=>x.includes(id))?x.filter(id=>!ids.includes(id)):Array.from(new Set([...x,...ids])))
   const toggleExpand=(key:string)=>setExpandedGroups(x=>{const n=new Set(x); n.has(key)?n.delete(key):n.add(key); return n})
@@ -359,7 +368,9 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
   return <Page>
     <button className="back" onClick={onBack}><ArrowLeft/>Lojistas</button>
     <div className="store-title"><div><h1>{store.name}</h1><p>{store.phone||'Sem WhatsApp cadastrado'}</p></div><div className="store-actions"><button className="secondary" onClick={()=>setEditModal(true)}><Pencil size={17}/>Editar</button><button className="primary" onClick={()=>setServiceModal(true)}><Plus/>Novo serviço</button></div></div>
-    <div className="metric-grid store-metrics"><Metric label="Saldo em aberto" value={money(open)} strong/><Metric label="Já recebido" value={money(paidTotal)}/><Metric label="Serviços" value={String(services.length)}/><Metric label="+30 dias" value={money(storeOld(store.id,data))} warn={storeOld(store.id,data)>0}/></div>
+    <PeriodFilter value={period} onChange={changePeriod}/>
+    <div className="metric-grid store-metrics"><Metric label="Saldo em aberto" value={money(open)} strong/><Metric label={period.mode==='all'?'Já recebido':'Recebido no período'} value={money(paidTotal)}/><Metric label="Serviços" value={String(services.length)}/><Metric label="+30 dias" value={money(old)} warn={old>0}/></div>
+    {period.mode!=='all'&&<PeriodActivity services={services} payments={payments} data={data}/>}
     <div className="action-strip"><button onClick={()=>setStatement(true)}><FileText/>Fechamento / cobrança</button>{selected.length>0&&<button className="receive" onClick={()=>setPaymentModal(true)}><Banknote/>Receber {money(selectedTotal)}</button>}</div>
     <div className="tabs"><button className={tab==='open'?'active':''} onClick={()=>{setTab('open');setSelected([])}}>Em aberto</button><button className={tab==='paid'?'active':''} onClick={()=>{setTab('paid');setSelected([])}}>Pagos</button><button className={tab==='all'?'active':''} onClick={()=>{setTab('all');setSelected([])}}>Todos</button></div>
     {tab==='open'&&visible.length>0&&<label className="select-all"><input type="checkbox" checked={openIds.length>0&&openIds.every(id=>selected.includes(id))} onChange={e=>setSelected(e.target.checked?openIds:[])}/> Selecionar todos em aberto</label>}
@@ -377,11 +388,11 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
         <div className="service-row">{anyOpen?<input className="check" type="checkbox" checked={allSelected} onChange={()=>toggleGroup(ids)}/>:<div className="paid-check"><Check/></div>}<div className="grow"><div className="service-top"><b>{g.device} ×{g.services.length}</b><span>{dateBR(g.service_date)}</span></div><p>{g.description||'Serviço'}</p></div><div className="service-price group"><div><b>{money(g.amount)}</b><span>cada</span></div><div><b>{money(groupOutstanding)}</b><span>{anyOpen?'em aberto':'pago'}</span></div></div><button className="icon" title={expanded?'Recolher':'Ver individualmente'} onClick={()=>toggleExpand(g.key)}>{expanded?<ChevronDown/>:<ChevronRight/>}</button></div>
         {expanded&&<div className="service-subgroup">{g.services.map(s=><ServiceRow key={s.id} s={s} data={data} selected={selected.includes(s.id)} onToggle={()=>toggle(s.id)} onEdit={()=>setEditingService(s)} onDelete={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}/>)}</div>}
       </div>
-    })}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Esse lojista está em dia.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
+    })}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Nenhum saldo em aberto nos serviços do período selecionado.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
     {serviceModal&&<ServiceModal storeId={store.id} onClose={()=>setServiceModal(false)} onSave={async (p,qty)=>{await onAddService(p,qty);setServiceModal(false)}}/>}
     {editingService&&<ServiceModal storeId={store.id} initial={editingService} onClose={()=>setEditingService(null)} onSave={async p=>{await onUpdateService(editingService.id,p);setEditingService(null)}}/>}
     {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note)=>{await onPayment(store.id,selected,amount,method,note);setSelected([]);setPaymentModal(false)}}/>}
-    {statement&&<StatementModal store={store} data={data} businessName={businessName} onClose={()=>setStatement(false)}/>}
+    {statement&&<StatementModal store={store} data={data} businessName={businessName} initialRange={range} onClose={()=>setStatement(false)}/>}
     {editModal&&<StoreModal initial={store} onClose={()=>setEditModal(false)} onSave={async p=>{await onUpdateStore(store.id,p);setEditModal(false)}}/>}
     <div className="danger-zone"><div className="store-actions"><button className="danger-outline" onClick={()=>confirm(`Zerar todo o histórico de ${store.name} (serviços e pagamentos)? O cadastro do lojista continua, só o histórico some. Essa ação não pode ser desfeita.`)&&onResetHistory(store.id)}><Trash2/>Zerar histórico</button><button className="danger-outline" onClick={()=>confirm(`Excluir ${store.name} e todo o histórico? Essa ação não pode ser desfeita.`)&&onDeleteStore(store.id)}><Trash2/>Excluir lojista</button></div></div>
   </Page>
@@ -482,8 +493,8 @@ function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSa
   return <Modal title="Registrar pagamento" onClose={onClose}><div className="payment-total"><span>Selecionado</span><b>{money(total)}</b></div><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave(val,method,note)}catch(err:any){alert(err.message)}finally{setBusy(false)}}}><label>Valor recebido<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} required/></label>{val<total&&val>0&&<div className="info-box">Pagamento parcial. O sistema quitará os serviços selecionados do mais antigo para o mais recente e manterá o restante em aberto.</div>}<label>Forma de pagamento<select value={method} onChange={e=>setMethod(e.target.value)}><option>PIX</option><option>Dinheiro</option><option>Transferência</option><option>Cartão</option><option>Outro</option></select></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy||val<=0||val>total}>Confirmar {val>0?money(val):''}</button></div></form></Modal>
 }
 
-function StatementModal({store,data,businessName,onClose}:{store:Store;data:DataSet;businessName:string;onClose:()=>void}){
-  const [start,setStart]=useState(monthStart()); const [end,setEnd]=useState(today()); const [copied,setCopied]=useState(false)
+function StatementModal({store,data,businessName,onClose,initialRange}:{store:Store;data:DataSet;businessName:string;onClose:()=>void;initialRange:{start:string;end:string;valid:boolean}}){
+  const [start,setStart]=useState(initialRange.start||data.services.filter(s=>s.store_id===store.id).map(s=>s.service_date).sort()[0]||monthStart()); const [end,setEnd]=useState(initialRange.end||today()); const [copied,setCopied]=useState(false)
   const services=data.services.filter(s=>s.store_id===store.id && s.service_date>=start && s.service_date<=end && serviceOutstanding(s.id,data)>0.009).sort((a,b)=>a.service_date.localeCompare(b.service_date))
   const total=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
   const text=buildStatementText(businessName,store,services,data,start,end)
@@ -517,3 +528,29 @@ function storeOld(storeId:string,data:DataSet){return data.services.filter(s=>s.
 function normalizePhone(p:string){let d=digits(p); if(d && !d.startsWith('55')) d='55'+d; return d}
 function buildStatementText(businessName:string,store:Store,services:Service[],data:DataSet,start:string,end:string){const body=services.map(s=>`${dateBR(s.service_date)} - ${s.device}${s.description?' - '+s.description:''} - ${money(serviceOutstanding(s.id,data))}`).join('\n');const total=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0);return `${businessName}\n\nOlá! Segue seu fechamento:\n\n${body||'Nenhum serviço em aberto no período.'}\n\nTotal em aberto: ${money(total)}\nPeríodo: ${dateBR(start)} a ${dateBR(end)}`}
 function buildReminderText(businessName:string,store:Store,services:Service[],data:DataSet){const body=services.map(s=>`${dateBR(s.service_date)} - ${s.device}${s.description?' - '+s.description:''} - ${money(serviceOutstanding(s.id,data))}`).join('\n');const total=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0);return `${businessName}\n\nOlá, ${store.name}! Passando para lembrar do(s) serviço(s) em aberto:\n\n${body}\n\nTotal: ${money(total)}\n\nQualquer dúvida, é só chamar!`}
+
+type Period = { mode:'all'|'month'|'7'|'15'|'custom'; month:string; start:string; end:string }
+const localDate=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+function initialPeriod():Period { const end=localDate(new Date()); return {mode:'all',month:end.slice(0,7),start:end.slice(0,7)+'-01',end} }
+function periodRange(p:Period,now=new Date()) {
+  if(p.mode==='all') return {start:'',end:'',valid:true}
+  let start=p.start,end=p.end
+  if(p.mode==='month') {
+    if(!/^\d{4}-\d{2}$/.test(p.month)) return {start:'',end:'',valid:false}
+    const [y,m]=p.month.split('-').map(Number)
+    if(m<1||m>12) return {start:'',end:'',valid:false}
+    start=p.month+'-01'; end=localDate(new Date(y,m,0))
+  } else if(p.mode==='7'||p.mode==='15') {
+    end=localDate(now); const first=new Date(now); first.setDate(first.getDate()-Number(p.mode)+1); start=localDate(first)
+  }
+  return {start,end,valid:!!start&&!!end&&start<=end}
+}
+function inPeriod(date:string,r:ReturnType<typeof periodRange>){return r.valid&&(!r.start||date>=r.start)&&(!r.end||date<=r.end)}
+
+function PeriodFilter({value,onChange}:{value:Period;onChange:(p:Period)=>void}){
+  const range=periodRange(value)
+  return <div className="period-filter"><style>{`.period-filter{margin:0 0 20px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}.period-fields{display:flex;flex-wrap:wrap;gap:12px}.period-fields label{display:grid;gap:7px;flex:1;min-width:160px;font-size:13px;font-weight:700;color:var(--text-muted)}.period-fields input,.period-fields select{width:100%;min-width:0;padding:11px 12px;border:1px solid var(--input-border);border-radius:10px;background:var(--surface);color:var(--text)}.period-filter small{display:block;margin-top:10px;color:var(--text-muted)}.period-activity{margin-bottom:20px}.period-activity h3{margin:8px 0}.period-activity p{margin:8px 0}@media(max-width:600px){.period-fields label{min-width:100%}}`}</style><div className="period-fields"><label>Período<select value={value.mode} onChange={e=>onChange({...value,mode:e.target.value as Period['mode']})}><option value="all">Geral — todo o período</option><option value="month">Mês específico</option><option value="7">Últimos 7 dias</option><option value="15">Últimos 15 dias</option><option value="custom">Personalizado</option></select></label>{value.mode==='month'&&<label>Mês e ano<input type="month" value={value.month} onChange={e=>onChange({...value,month:e.target.value})}/></label>}{value.mode==='custom'&&<><label>De<input type="date" value={value.start} max={value.end} onChange={e=>onChange({...value,start:e.target.value})}/></label><label>Até<input type="date" value={value.end} min={value.start} onChange={e=>onChange({...value,end:e.target.value})}/></label></>}</div><small role="status">{!range.valid?'Selecione um período válido: a data final deve ser igual ou posterior à inicial.':value.mode==='all'?'Todos os registros.':`${dateBR(range.start)} a ${dateBR(range.end)} · Serviços pela data do serviço; recebimentos pela data do pagamento. Saldos em aberto são os atuais dos serviços selecionados.`}</small></div>
+}
+function PeriodActivity({services,payments,data}:{services:Service[];payments:Payment[];data:DataSet}){
+  return <div className="panel period-activity"><h3>Movimentações do período</h3><p>Serviços lançados: <b>{money(services.reduce((sum,s)=>sum+s.amount,0))}</b> · {services.length} serviço(s)</p><h3>Recebimentos</h3>{[...payments].sort((a,b)=>b.paid_at.localeCompare(a.paid_at)).map(p=><div className="statement-line" key={p.id}><span>{dateBR(p.paid_at)} · {data.stores.find(s=>s.id===p.store_id)?.name||'Lojista'}<small>{p.method}</small></span><b>{money(p.amount)}</b></div>)}{!payments.length&&<p>Nenhum recebimento no período.</p>}</div>
+}
