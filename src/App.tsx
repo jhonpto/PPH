@@ -295,8 +295,9 @@ function Dashboard({data,onOpenStore,onNewService,businessName}:{data:DataSet;on
   return <Page>
     <Header title="Visão geral" subtitle="Tudo que está na rua, sem precisar somar nada."/>
     <PeriodFilter value={period} onChange={setPeriod}/>
-    <div className="metric-grid"><Metric label="Em aberto" value={money(totals.open)} strong/><Metric label={period.mode==='all'?'Recebido no período geral':'Recebido no período'} value={money(totals.received)}/><Metric label="Lojistas devendo" value={String(totals.debtors)}/><Metric label="+30 dias" value={money(totals.old)} warn={totals.old>0}/></div>
-    {period.mode==='all'?<MonthlyChart data={data}/>:<PeriodActivity services={scoped.services} payments={scoped.payments} data={data}/>}
+    <div className="metric-grid"><Metric label="Saldo atual dos serviços do período" value={money(totals.open)} strong/><Metric label="Entradas pela data do pagamento" value={money(totals.received)}/><Metric label="Lojistas devendo" value={String(totals.debtors)}/><Metric label="+30 dias" value={money(totals.old)} warn={totals.old>0}/></div>
+    {period.mode==='all'&&<MonthlyChart data={data}/>}
+    <PeriodActivity services={scoped.services} payments={scoped.payments} data={data}/>
     {reminders.length>0&&<><div className="section-head"><div><h2>Lembretes de cobrança</h2><p>Serviços em aberto há 7 dias ou mais.</p></div></div>
     <div className="list-card">{reminders.map(r=><div className="debtor-row" key={r.st.id}><div className="avatar">{r.st.name.slice(0,2).toUpperCase()}</div><div className="grow"><b>{r.st.name}</b><span>{money(r.total)} · há {r.days} dias</span></div><button className="whatsapp" disabled={!r.st.phone} onClick={()=>window.open(`https://wa.me/${normalizePhone(r.st.phone)}?text=${encodeURIComponent(buildReminderText(businessName,r.st,r.services,data))}`,'_blank')}><MessageCircle size={17}/>Lembrar</button></div>)}</div></>}
     <div className="section-head"><div><h2>Quem está devendo</h2><p>Ordenado pelo maior saldo em aberto.</p></div></div>
@@ -372,8 +373,8 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
     <button className="back" onClick={onBack}><ArrowLeft/>Lojistas</button>
     <div className="store-title"><div><h1>{store.name}</h1><p>{store.phone||'Sem WhatsApp cadastrado'}</p></div><div className="store-actions"><button className="secondary" onClick={()=>setEditModal(true)}><Pencil size={17}/>Editar</button><button className="primary" onClick={()=>setServiceModal(true)}><Plus/>Novo serviço</button></div></div>
     <PeriodFilter value={period} onChange={changePeriod}/>
-    <div className="metric-grid store-metrics"><Metric label="Saldo em aberto" value={money(open)} strong/><Metric label={period.mode==='all'?'Já recebido':'Recebido no período'} value={money(paidTotal)}/><Metric label="Serviços" value={String(services.length)}/><Metric label="+30 dias" value={money(old)} warn={old>0}/></div>
-    {period.mode!=='all'&&<PeriodActivity services={services} payments={payments} data={data}/>}
+    <div className="metric-grid store-metrics"><Metric label="Saldo atual dos serviços do período" value={money(open)} strong/><Metric label="Entradas pela data do pagamento" value={money(paidTotal)}/><Metric label="Serviços" value={String(services.length)}/><Metric label="+30 dias" value={money(old)} warn={old>0}/></div>
+    <PeriodActivity services={services} payments={payments} data={data}/>
     <div className="action-strip"><button onClick={()=>setStatement(true)}><FileText/>Fechamento / cobrança</button>{selected.length>0&&<button className="receive" onClick={()=>setPaymentModal(true)}><Banknote/>Receber {money(selectedTotal)}</button>}</div>
     <div className="tabs"><button className={tab==='open'?'active':''} onClick={()=>{setTab('open');setSelected([])}}>Em aberto</button><button className={tab==='paid'?'active':''} onClick={()=>{setTab('paid');setSelected([])}}>Pagos</button><button className={tab==='all'?'active':''} onClick={()=>{setTab('all');setSelected([])}}>Todos</button></div>
     {tab==='open'&&visible.length>0&&<label className="select-all"><input type="checkbox" checked={openIds.length>0&&openIds.every(id=>selected.includes(id))} onChange={e=>setSelected(e.target.checked?openIds:[])}/> Selecionar todos em aberto</label>}
@@ -566,8 +567,59 @@ function PeriodFilter({value,onChange}:{value:Period;onChange:(p:Period)=>void})
   const range=periodRange(value)
   return <div className="period-filter"><style>{`.period-filter{margin:0 0 20px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}.period-fields{display:flex;flex-wrap:wrap;gap:12px}.period-fields label{display:grid;gap:7px;flex:1;min-width:160px;font-size:13px;font-weight:700;color:var(--text-muted)}.period-fields input,.period-fields select{width:100%;min-width:0;padding:11px 12px;border:1px solid var(--input-border);border-radius:10px;background:var(--surface);color:var(--text)}.period-filter small{display:block;margin-top:10px;color:var(--text-muted)}.period-activity{margin-bottom:20px}.period-activity h3{margin:8px 0}.period-activity p{margin:8px 0}@media(max-width:600px){.period-fields label{min-width:100%}}`}</style><div className="period-fields"><label>Período<select value={value.mode} onChange={e=>onChange({...value,mode:e.target.value as Period['mode']})}><option value="all">Geral — todo o período</option><option value="month">Mês específico</option><option value="7">Últimos 7 dias</option><option value="15">Últimos 15 dias</option><option value="custom">Personalizado</option></select></label>{value.mode==='month'&&<label>Mês e ano<input type="month" value={value.month} onChange={e=>onChange({...value,month:e.target.value})}/></label>}{value.mode==='custom'&&<><label>De<input type="date" value={value.start} max={value.end} onChange={e=>onChange({...value,start:e.target.value})}/></label><label>Até<input type="date" value={value.end} min={value.start} onChange={e=>onChange({...value,end:e.target.value})}/></label></>}</div><small role="status">{!range.valid?'Selecione um período válido: a data final deve ser igual ou posterior à inicial.':value.mode==='all'?'Todos os registros.':`${dateBR(range.start)} a ${dateBR(range.end)} · Serviços pela data do serviço; recebimentos pela data do pagamento. Saldos em aberto são os atuais dos serviços selecionados.`}</small></div>
 }
+type ReceiptPart = {payment:Payment; service?:Service; cash:number; discount:number}
+// Allocate cash and discounts in integer cents, using the same discount split as serviceDiscount.
+function receiptParts(data:DataSet):ReceiptPart[]{
+  const services=new Map(data.services.map(s=>[s.id,s]))
+  const allocations=new Map<string,Allocation[]>()
+  for(const a of data.allocations){const list=allocations.get(a.payment_id)||[];list.push(a);allocations.set(a.payment_id,list)}
+  const parts:ReceiptPart[]=[]
+  for(const payment of data.payments){
+    const rows=(allocations.get(payment.id)||[]).sort((a,b)=>a.service_id.localeCompare(b.service_id)||a.id.localeCompare(b.id))
+    const total=rows.reduce((sum,a)=>sum+Math.round(a.amount*100),0)
+    const cash=Math.round(payment.amount*100),rebate=Math.max(0,total-cash)
+    let running=0,assigned=0
+    for(const a of rows){
+      const cents=Math.round(a.amount*100),before=total?Math.round(running*rebate/total):0
+      running+=cents
+      const discount=total?Math.round(running*rebate/total)-before:0
+      const received=cents-discount;assigned+=received
+      const service=services.get(a.service_id)
+      parts.push({payment,service:service?.store_id===payment.store_id?service:undefined,cash:received,discount})
+    }
+    if(cash>assigned)parts.push({payment,cash:cash-assigned,discount:0})
+  }
+  return parts
+}
+function monthLabel(key:string){return key?new Date(key+'-01T12:00:00').toLocaleDateString('pt-BR',{month:'long',year:'numeric'}):'Sem vínculo com serviço'}
+function periodReport(services:Service[],payments:Payment[],data:DataSet){
+  const parts=receiptParts(data),ids=new Set(services.map(s=>s.id)),paymentIds=new Set(payments.map(p=>p.id))
+  const production=new Map<string,{month:string;gross:number;cash:number;discount:number;open:number}>()
+  for(const s of services){const month=s.service_date.slice(0,7);const row=production.get(month)||{month,gross:0,cash:0,discount:0,open:0};row.gross+=Math.round(s.amount*100);row.open+=Math.round(serviceOutstanding(s.id,data)*100);production.set(month,row)}
+  const cohortParts=parts.filter(p=>p.service&&ids.has(p.service.id))
+  for(const p of cohortParts){const row=production.get(p.service!.service_date.slice(0,7))!;row.cash+=p.cash;row.discount+=p.discount}
+  const cashParts=parts.filter(p=>paymentIds.has(p.payment.id))
+  const origins=new Map<string,{month:string;cash:number;discount:number}>()
+  for(const p of cashParts){const month=p.service?.service_date.slice(0,7)||'';const row=origins.get(month)||{month,cash:0,discount:0};row.cash+=p.cash;row.discount+=p.discount;origins.set(month,row)}
+  return {production:[...production.values()].sort((a,b)=>a.month.localeCompare(b.month)),origins:[...origins.values()].sort((a,b)=>a.month.localeCompare(b.month)),cohortParts,cashParts,cashTotal:payments.reduce((sum,p)=>sum+Math.round(p.amount*100),0)}
+}
+function ReceiptDetails({parts,data}:{parts:ReceiptPart[];data:DataSet}){
+  const grouped=new Map<string,{payment:Payment;parts:ReceiptPart[]}>()
+  for(const part of parts){const row=grouped.get(part.payment.id)||{payment:part.payment,parts:[]};row.parts.push(part);grouped.set(part.payment.id,row)}
+  return <>{[...grouped.values()].sort((a,b)=>b.payment.paid_at.localeCompare(a.payment.paid_at)||a.payment.id.localeCompare(b.payment.id)).map(({payment,parts})=><details className="period-receipt" key={payment.id}><summary><span>Recebido em {dateBR(payment.paid_at)} · {data.stores.find(s=>s.id===payment.store_id)?.name||'Lojista'}</span><b>{money(parts.reduce((sum,p)=>sum+p.cash,0)/100)}</b></summary>{parts.map((p,i)=><div className="statement-line" key={i}><span>{p.service?`${p.service.device} · Serviço de ${dateBR(p.service.service_date)}`:'Sem vínculo com serviço'}<small>{p.service?.description||''}{p.discount>0?` · Desconto ${money(p.discount/100)}`:''}</small></span><b>{money(p.cash/100)}</b></div>)}</details>)}</>
+}
 function PeriodActivity({services,payments,data}:{services:Service[];payments:Payment[];data:DataSet}){
-  return <div className="panel period-activity"><h3>Movimentações do período</h3><p>Serviços lançados: <b>{money(services.reduce((sum,s)=>sum+s.amount,0))}</b> · {services.length} serviço(s)</p><h3>Recebimentos</h3>{[...payments].sort((a,b)=>b.paid_at.localeCompare(a.paid_at)).map(p=><div className="statement-line" key={p.id}><span>{dateBR(p.paid_at)} · {data.stores.find(s=>s.id===p.store_id)?.name||'Lojista'}<small>{p.method}{paymentDiscount(p,data)>0?` · Desconto ${money(paymentDiscount(p,data))}`:''}</small></span><b>{money(p.amount)}</b></div>)}{!payments.length&&<p>Nenhum recebimento no período.</p>}</div>
+  const report=useMemo(()=>periodReport(services,payments,data),[services,payments,data])
+  const gross=report.production.reduce((sum,r)=>sum+r.gross,0),received=report.production.reduce((sum,r)=>sum+r.cash,0),discount=report.production.reduce((sum,r)=>sum+r.discount,0)
+  return <div className="period-activity"><style>{`.period-report{margin:20px 0}.period-report h2{font-size:20px;margin:0 0 8px}.period-report p{font-size:13px}.period-table-wrap{overflow-x:auto}.period-table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}.period-table th,.period-table td{padding:12px 9px;border-bottom:1px solid var(--border);white-space:nowrap}.period-table th{color:var(--text-muted);font-weight:600}.period-receipt{border-bottom:1px solid var(--border);padding:12px 0}.period-receipt summary{cursor:pointer;display:flex;justify-content:space-between;gap:12px;font-size:13px}.period-receipt summary b{white-space:nowrap}.period-report .metric-grid{margin:16px 0}.period-report>details>summary{cursor:pointer;font-weight:650;padding:16px 0}`}</style>
+    <section className="panel period-report"><h2>Produção pela data do serviço</h2><p>Somente serviços lançados no período selecionado. O recebido inclui pagamentos em qualquer data, inclusive nos meses seguintes. Os saldos são atuais.</p>
+    <div className="metric-grid"><Metric label="Total produzido / lançado" value={money(gross/100)} strong/><Metric label="Já recebido desses serviços" value={money(received/100)}/><Metric label="Descontos desses serviços" value={money(discount/100)}/><Metric label="Saldo atual desses serviços" value={money(report.production.reduce((sum,r)=>sum+r.open,0)/100)}/></div>
+    {report.production.length?<div className="period-table-wrap"><table className="period-table"><thead><tr><th>Mês do serviço</th><th>Lançado</th><th>Recebido até agora</th><th>Descontos</th><th>Em aberto hoje</th></tr></thead><tbody>{report.production.map(r=><tr key={r.month}><td>{monthLabel(r.month)}</td><td>{money(r.gross/100)}</td><td>{money(r.cash/100)}</td><td>{money(r.discount/100)}</td><td>{money(r.open/100)}</td></tr>)}</tbody></table></div>:<p>Nenhum serviço lançado no período.</p>}
+    <details><summary>Quando esses serviços foram pagos</summary><p>Valores referentes apenas aos serviços selecionados, mesmo que o pagamento tenha incluído outras notas.</p><ReceiptDetails parts={report.cohortParts} data={data}/>{!report.cohortParts.length&&<p>Nenhum recebimento vinculado a esses serviços.</p>}</details></section>
+    <section className="panel period-report"><h2>Entradas pela data do pagamento</h2><p>Dinheiro que entrou no período selecionado, separado pelo mês de origem dos serviços. Descontos não entram no total recebido.</p><div className="payment-total"><span>Total recebido no período</span><b>{money(report.cashTotal/100)}</b></div>
+    {report.origins.length?<div className="period-table-wrap"><table className="period-table"><thead><tr><th>Referente a serviços de</th><th>Dinheiro recebido</th><th>Desconto concedido</th></tr></thead><tbody>{report.origins.map(r=><tr key={r.month}><td>{monthLabel(r.month)}</td><td>{money(r.cash/100)}</td><td>{money(r.discount/100)}</td></tr>)}</tbody></table></div>:<p>Nenhum recebimento no período.</p>}
+    <details><summary>Detalhar recebimentos e notas de origem</summary><ReceiptDetails parts={report.cashParts} data={data}/></details><p>As duas visões descrevem os mesmos pagamentos por critérios diferentes. Não some os totais entre elas.</p></section>
+  </div>
 }
 
 // A payment amount is cash received; allocations settle principal (cash + discount).
