@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle, ArrowLeft, Banknote, Check, ChevronDown, ChevronRight, ClipboardCopy,
-  CreditCard, Download, FileText, Home, LogOut, MessageCircle, Mic, Pencil, Plus,
+  Copy, CreditCard, Download, FileText, Home, LogOut, MessageCircle, Mic, Pencil, Plus,
   ReceiptText, Search, Settings, Store as StoreIcon, Trash2, Users, X
 } from 'lucide-react'
 import { supabase, supabaseConfigured } from './supabase'
@@ -145,18 +145,10 @@ export default function App(){
     flash('Serviço removido')
   }
 
-  async function recordPayment(storeId:string, selectedServiceIds:string[], amount:number, method:string, note:string){
-    const outstanding=(id:string)=>serviceOutstanding(id,data)
-    const selected=data.services.filter(s=>selectedServiceIds.includes(s.id)).sort((a,b)=>a.service_date.localeCompare(b.service_date))
-    const cap=selected.reduce((sum,s)=>sum+outstanding(s.id),0)
-    if(amount<=0 || amount>cap+0.001) throw new Error('Valor inválido para os serviços selecionados.')
-    let remaining=amount
-    const allocations:{service_id:string;amount:number}[]=[]
-    for(const s of selected){
-      if(remaining<=0) break
-      const part=Math.min(outstanding(s.id),remaining)
-      if(part>0){allocations.push({service_id:s.id,amount:+part.toFixed(2)});remaining=+(remaining-part).toFixed(2)}
-    }
+  async function recordPayment(storeId:string, selectedServiceIds:string[], amount:number, method:string, note:string, discount:number=0){
+    const allocations=planSettlement(storeId,selectedServiceIds,amount,discount,data)
+    const cap=data.services.filter(s=>s.store_id===storeId&&selectedServiceIds.includes(s.id)).reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
+    if(discount>0) note=`Total selecionado: ${money(cap)} · Desconto: ${money(discount)} · Recebido: ${money(amount)}${note?'\n'+note:''}`
     if(supabaseConfigured){
       const {data:p,error}=await supabase.from('payments').insert({store_id:storeId,paid_at:today(),amount,method,note}).select().single()
       if(error) throw error
@@ -348,7 +340,7 @@ function StoresPage({data,onOpenStore,onAdd}:{data:DataSet;onOpenStore:(id:strin
   return <Page><Header title="Lojistas" subtitle={`${data.stores.length} cadastrados`} action={<button className="primary" onClick={()=>setModal(true)}><Plus/>Novo lojista</button>}/><SearchBox value={q} onChange={setQ} placeholder="Buscar por nome"/><div className="list-card">{stores.map(st=><button className="debtor-row" key={st.id} onClick={()=>onOpenStore(st.id)}><div className="avatar"><StoreIcon/></div><div className="grow"><b>{st.name}</b><span>{st.phone||'Sem telefone'}</span></div><div className="row-money"><b className={storeOpen(st.id,data)>0?'danger-text':''}>{money(storeOpen(st.id,data))}</b><span>em aberto</span></div><ChevronRight/></button>)}{!stores.length&&<Empty title="Nenhum lojista" text="Cadastre seu primeiro lojista para começar."/>}</div>{modal&&<StoreModal onClose={()=>setModal(false)} onSave={async p=>{await onAdd(p);setModal(false)}}/>}</Page>
 }
 
-function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateService,onPayment,onDeleteStore,onUpdateStore,onResetHistory,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any,quantity?:number)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onUpdateService:(id:string,p:any)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;onResetHistory:(id:string)=>Promise<void>;businessName:string}){
+function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateService,onPayment,onDeleteStore,onUpdateStore,onResetHistory,businessName}:{store:Store;data:DataSet;onBack:()=>void;onAddService:(p:any,quantity?:number)=>Promise<void>;onDeleteService:(id:string)=>Promise<void>;onUpdateService:(id:string,p:any)=>Promise<void>;onPayment:(storeId:string,ids:string[],amount:number,method:string,note:string,discount?:number)=>Promise<void>;onDeleteStore:(id:string)=>Promise<void>;onUpdateStore:(id:string,p:any)=>Promise<void>;onResetHistory:(id:string)=>Promise<void>;businessName:string}){
   const [tab,setTab]=useState<'open'|'paid'|'all'>('open'); const [serviceModal,setServiceModal]=useState(false); const [editingService,setEditingService]=useState<Service|null>(null); const [paymentModal,setPaymentModal]=useState(false); const [statement,setStatement]=useState(false); const [editModal,setEditModal]=useState(false); const [selected,setSelected]=useState<string[]>([]); const [expandedGroups,setExpandedGroups]=useState<Set<string>>(new Set())
   const [period,setPeriod]=useState(initialPeriod)
   const range=periodRange(period)
@@ -356,7 +348,18 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
   const payments=data.payments.filter(p=>p.store_id===store.id&&inPeriod(p.paid_at,range))
   const services=data.services.filter(s=>s.store_id===store.id&&inPeriod(s.service_date,range)).sort((a,b)=>b.service_date.localeCompare(a.service_date))
   const visible=services.filter(s=>tab==='all'?true:tab==='open'?serviceOutstanding(s.id,data)>0.009:serviceOutstanding(s.id,data)<=0.009)
-  const groups=groupServices(visible)
+  const groups=visible.map(s=>({key:s.id,device:s.device,description:s.description,amount:s.amount,service_date:s.service_date,services:[s]}))
+  const duplicateLock=useRef(false)
+  const [duplicating,setDuplicating]=useState(false)
+  async function duplicateService(s:Service){
+    if(duplicateLock.current) return
+    duplicateLock.current=true;setDuplicating(true)
+    try {
+      await onAddService(duplicatePayload(s))
+      setTab('open');setSelected([])
+    } catch(err:any){alert('Não foi possível duplicar: '+err.message)}
+    finally {duplicateLock.current=false;setDuplicating(false)}
+  }
   const selectedTotal=selected.reduce((sum,id)=>sum+serviceOutstanding(id,data),0)
   const paidTotal=payments.reduce((s,p)=>s+p.amount,0)
   const open=services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
@@ -377,7 +380,7 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
     <div className="service-list">{groups.map(g=>{
       if(g.services.length===1){
         const s=g.services[0]
-        return <ServiceRow key={s.id} s={s} data={data} selected={selected.includes(s.id)} onToggle={()=>toggle(s.id)} onEdit={()=>setEditingService(s)} onDelete={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}/>
+        return <ServiceRow key={s.id} s={s} data={data} selected={selected.includes(s.id)} onToggle={()=>toggle(s.id)} onEdit={()=>setEditingService(s)} onDuplicate={()=>duplicateService(s)} duplicating={duplicating} onDelete={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}/>
       }
       const ids=g.services.map(s=>s.id)
       const groupOutstanding=g.services.reduce((sum,s)=>sum+serviceOutstanding(s.id,data),0)
@@ -386,32 +389,33 @@ function StorePage({store,data,onBack,onAddService,onDeleteService,onUpdateServi
       const expanded=expandedGroups.has(g.key)
       return <div className="service-group" key={g.key}>
         <div className="service-row">{anyOpen?<input className="check" type="checkbox" checked={allSelected} onChange={()=>toggleGroup(ids)}/>:<div className="paid-check"><Check/></div>}<div className="grow"><div className="service-top"><b>{g.device} ×{g.services.length}</b><span>{dateBR(g.service_date)}</span></div><p>{g.description||'Serviço'}</p></div><div className="service-price group"><div><b>{money(g.amount)}</b><span>cada</span></div><div><b>{money(groupOutstanding)}</b><span>{anyOpen?'em aberto':'pago'}</span></div></div><button className="icon" title={expanded?'Recolher':'Ver individualmente'} onClick={()=>toggleExpand(g.key)}>{expanded?<ChevronDown/>:<ChevronRight/>}</button></div>
-        {expanded&&<div className="service-subgroup">{g.services.map(s=><ServiceRow key={s.id} s={s} data={data} selected={selected.includes(s.id)} onToggle={()=>toggle(s.id)} onEdit={()=>setEditingService(s)} onDelete={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}/>)}</div>}
+        {expanded&&<div className="service-subgroup">{g.services.map(s=><ServiceRow key={s.id} s={s} data={data} selected={selected.includes(s.id)} onToggle={()=>toggle(s.id)} onEdit={()=>setEditingService(s)} onDuplicate={()=>duplicateService(s)} duplicating={duplicating} onDelete={()=>confirm('Excluir este lançamento?')&&onDeleteService(s.id)}/>)}</div>}
       </div>
     })}{!visible.length&&<Empty title={tab==='open'?'Nenhum serviço em aberto':'Nenhum lançamento aqui'} text={tab==='open'?'Nenhum saldo em aberto nos serviços do período selecionado.':'Os serviços aparecerão conforme forem lançados.'}/>}</div>
     {serviceModal&&<ServiceModal storeId={store.id} onClose={()=>setServiceModal(false)} onSave={async (p,qty)=>{await onAddService(p,qty);setServiceModal(false)}}/>}
     {editingService&&<ServiceModal storeId={store.id} initial={editingService} onClose={()=>setEditingService(null)} onSave={async p=>{await onUpdateService(editingService.id,p);setEditingService(null)}}/>}
-    {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note)=>{await onPayment(store.id,selected,amount,method,note);setSelected([]);setPaymentModal(false)}}/>}
+    {paymentModal&&<PaymentModal total={selectedTotal} onClose={()=>setPaymentModal(false)} onSave={async (amount,method,note,discount)=>{await onPayment(store.id,selected,amount,method,note,discount);setSelected([]);setPaymentModal(false)}}/>}
     {statement&&<StatementModal store={store} data={data} businessName={businessName} initialRange={range} onClose={()=>setStatement(false)}/>}
     {editModal&&<StoreModal initial={store} onClose={()=>setEditModal(false)} onSave={async p=>{await onUpdateStore(store.id,p);setEditModal(false)}}/>}
     <div className="danger-zone"><div className="store-actions"><button className="danger-outline" onClick={()=>confirm(`Zerar todo o histórico de ${store.name} (serviços e pagamentos)? O cadastro do lojista continua, só o histórico some. Essa ação não pode ser desfeita.`)&&onResetHistory(store.id)}><Trash2/>Zerar histórico</button><button className="danger-outline" onClick={()=>confirm(`Excluir ${store.name} e todo o histórico? Essa ação não pode ser desfeita.`)&&onDeleteStore(store.id)}><Trash2/>Excluir lojista</button></div></div>
   </Page>
 }
 
-function ServiceRow({s,data,selected,onToggle,onEdit,onDelete}:{s:Service;data:DataSet;selected:boolean;onToggle:()=>void;onEdit:()=>void;onDelete:()=>void}){
-  const out=serviceOutstanding(s.id,data); const paid=s.amount-out
+function ServiceRow({s,data,selected,onToggle,onEdit,onDelete,onDuplicate,duplicating}:{s:Service;data:DataSet;selected:boolean;onToggle:()=>void;onEdit:()=>void;onDelete:()=>void;onDuplicate:()=>void;duplicating:boolean}){
+  const out=serviceOutstanding(s.id,data); const discount=serviceDiscount(s.id,data); const paid=Math.max(0,s.amount-out-discount)
   return <div className={'service-row '+(out<=0.009?'paid':'')}>
     {out>0.009?<input className="check" type="checkbox" checked={selected} onChange={onToggle}/>:<div className="paid-check"><Check/></div>}
     {s.photo_url&&<a href={s.photo_url} target="_blank" rel="noreferrer"><img className="service-photo" src={s.photo_url} alt=""/></a>}
-    <div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div>
-    <div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?'Pago':out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>
+    <div className="grow"><div className="service-top"><b>{s.device}</b><span>{dateBR(s.service_date)}</span></div><p>{s.description||'Serviço'}</p>{discount>0?<small>Recebido {money(paid)} · Desconto {money(discount)}{out>0.009?` · Restante ${money(out)}`:''}</small>:paid>0&&out>0.009&&<small>Pago {money(paid)} · Restante {money(out)}</small>}</div>
+    <div className="service-price"><b>{money(s.amount)}</b><span>{out<=0.009?(discount>0?'Quitado com desconto':'Pago'):out<s.amount?`${money(out)} aberto`:'Em aberto'}</span></div>
+    <button className="icon" title="Duplicar serviço" aria-label={`Duplicar serviço ${s.device}`} disabled={duplicating} onClick={onDuplicate}><Copy/></button>
     {out>0.009&&servicePaid(s.id,data)<=0.009&&<><button className="icon" title="Editar" onClick={onEdit}><Pencil/></button><button className="icon danger" title="Excluir" onClick={onDelete}><Trash2/></button></>}
   </div>
 }
 
 function PaymentsPage({data,businessName}:{data:DataSet;businessName:string}){
   const [receipt,setReceipt]=useState<Payment|null>(null)
-  return <Page><Header title="Pagamentos" subtitle="Histórico de tudo que entrou."/><div className="list-card">{data.payments.map(p=>{const st=data.stores.find(s=>s.id===p.store_id); const qty=data.allocations.filter(a=>a.payment_id===p.id).length; return <button className="debtor-row" onClick={()=>setReceipt(p)} key={p.id}><div className="avatar"><CreditCard/></div><div className="grow"><b>{st?.name||'Lojista removido'}</b><span>{dateBR(p.paid_at)} · {qty} serviço(s) · {p.method||'Não informado'}</span></div><div className="row-money success"><b>{money(p.amount)}</b><ChevronRight/></div></button>})}{!data.payments.length&&<Empty title="Nenhum pagamento ainda" text="As baixas realizadas aparecerão aqui."/>}</div>{receipt&&<ReceiptModal payment={receipt} data={data} businessName={businessName} onClose={()=>setReceipt(null)}/>}</Page>
+  return <Page><Header title="Pagamentos" subtitle="Histórico de tudo que entrou."/><div className="list-card">{data.payments.map(p=>{const st=data.stores.find(s=>s.id===p.store_id); const qty=data.allocations.filter(a=>a.payment_id===p.id).length; return <button className="debtor-row" onClick={()=>setReceipt(p)} key={p.id}><div className="avatar"><CreditCard/></div><div className="grow"><b>{st?.name||'Lojista removido'}</b><span>{dateBR(p.paid_at)} · {qty} serviço(s) · {p.method||'Não informado'}{paymentDiscount(p,data)>0?` · Desconto ${money(paymentDiscount(p,data))}`:''}</span></div><div className="row-money success"><b>{money(p.amount)}</b><ChevronRight/></div></button>})}{!data.payments.length&&<Empty title="Nenhum pagamento ainda" text="As baixas realizadas aparecerão aqui."/>}</div>{receipt&&<ReceiptModal payment={receipt} data={data} businessName={businessName} onClose={()=>setReceipt(null)}/>}</Page>
 }
 
 function SettingsPage({settings,onSave,online,theme,onThemeChange,onResetAll}:{settings:any;onSave:(s:any)=>void;online:boolean;theme:string;onThemeChange:(t:string)=>void;onResetAll:()=>Promise<void>}){
@@ -488,9 +492,18 @@ function ServiceModal({storeId,initial,onClose,onSave}:{storeId:string;initial?:
     <div className="form-grid"><label>Aparelho<input autoFocus value={device} onChange={e=>setDevice(e.target.value)} placeholder="Ex.: iPhone 13 Pro" required/></label><label>Valor unitário (R$)<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} placeholder="450,00" required/></label></div><label>Serviço<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Reparo de placa"/></label><div className="form-grid"><label>Data<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label>{!initial&&<label>Quantidade<input inputMode="numeric" value={quantity} onChange={e=>setQuantity(e.target.value.replace(/\D/g,'')||'1')}/></label>}</div>{!initial&&qty>1&&<div className="info-box">Vai lançar {qty} serviços iguais (mesmo aparelho, valor e data) — total {money(totalAmount)}.</div>}<label>Foto do aparelho (opcional){photoPreview?<img className="photo-preview" src={photoPreview} alt=""/>:null}<input type="file" accept="image/*" capture="environment" onChange={e=>pickPhoto(e.target.files?.[0])}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando...':initial?'Salvar':qty>1?`Salvar ${qty} serviços`:'Salvar serviço'}</button></div></form></Modal>
 }
 
-function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSave:(amount:number,method:string,note:string)=>Promise<void>}){
-  const [amount,setAmount]=useState(moneyMaskFromNumber(total)); const [method,setMethod]=useState('PIX'); const [note,setNote]=useState(''); const [busy,setBusy]=useState(false); const val=unmaskMoney(amount)
-  return <Modal title="Registrar pagamento" onClose={onClose}><div className="payment-total"><span>Selecionado</span><b>{money(total)}</b></div><form onSubmit={async e=>{e.preventDefault();setBusy(true);try{await onSave(val,method,note)}catch(err:any){alert(err.message)}finally{setBusy(false)}}}><label>Valor recebido<input inputMode="decimal" value={amount} onChange={e=>setAmount(maskMoney(e.target.value))} required/></label>{val<total&&val>0&&<div className="info-box">Pagamento parcial. O sistema quitará os serviços selecionados do mais antigo para o mais recente e manterá o restante em aberto.</div>}<label>Forma de pagamento<select value={method} onChange={e=>setMethod(e.target.value)}><option>PIX</option><option>Dinheiro</option><option>Transferência</option><option>Cartão</option><option>Outro</option></select></label><label>Observação<textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={busy||val<=0||val>total}>Confirmar {val>0?money(val):''}</button></div></form></Modal>
+function PaymentModal({total,onClose,onSave}:{total:number;onClose:()=>void;onSave:(amount:number,method:string,note:string,discount:number)=>Promise<void>}){
+  const [amount,setAmount]=useState(moneyMaskFromNumber(total)); const [discountText,setDiscountText]=useState('0,00'); const [method,setMethod]=useState('PIX'); const [note,setNote]=useState(''); const [busy,setBusy]=useState(false); const lock=useRef(false)
+  const val=unmaskMoney(amount),discount=unmaskMoney(discountText),net=+(total-discount).toFixed(2)
+  const invalid=discount<0||discount>=total||val<=0||Math.round((val+discount)*100)>Math.round(total*100)
+  function changeDiscount(raw:string){const masked=maskMoney(raw);setDiscountText(masked);setAmount(moneyMaskFromNumber(Math.max(0,total-unmaskMoney(masked))))}
+  return <Modal title="Registrar pagamento" onClose={()=>{if(!lock.current)onClose()}}><div className="payment-total"><span>Total selecionado</span><b>{money(total)}</b></div><form onSubmit={async e=>{e.preventDefault();if(lock.current||invalid)return;lock.current=true;setBusy(true);try{await onSave(val,method,note,discount)}catch(err:any){alert(err.message)}finally{lock.current=false;setBusy(false)}}}>
+    <label>Desconto geral (R$)<input inputMode="decimal" value={discountText} disabled={busy} onChange={e=>changeDiscount(e.target.value)}/></label>
+    <div className="statement-preview"><div className="statement-line"><span>Total antes do desconto</span><b>{money(total)}</b></div><div className="statement-line"><span>Desconto</span><b>− {money(discount)}</b></div><div className="statement-total"><span>Total a pagar</span><b>{money(Math.max(0,net))}</b></div></div>
+    {discount>=total&&<div className="info-box" role="alert">O desconto deve ser menor que o total; registre um pagamento de pelo menos R$ 0,01.</div>}
+    <label>Valor recebido<input inputMode="decimal" value={amount} disabled={busy} onChange={e=>setAmount(maskMoney(e.target.value))} required/></label>
+    {val>0&&val<net&&<div className="info-box">Pagamento parcial. Após o desconto e este recebimento, restam {money(net-val)} em aberto.</div>}
+    <label>Forma de pagamento<select value={method} disabled={busy} onChange={e=>setMethod(e.target.value)}><option>PIX</option><option>Dinheiro</option><option>Transferência</option><option>Cartão</option><option>Outro</option></select></label><label>Observação<textarea value={note} disabled={busy} onChange={e=>setNote(e.target.value)} placeholder="Opcional"/></label><div className="modal-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>Cancelar</button><button className="primary" disabled={busy||invalid}>{busy?'Registrando...':`Confirmar ${money(val)}`}</button></div></form></Modal>
 }
 
 function StatementModal({store,data,businessName,onClose,initialRange}:{store:Store;data:DataSet;businessName:string;onClose:()=>void;initialRange:{start:string;end:string;valid:boolean}}){
@@ -506,10 +519,12 @@ function StatementModal({store,data,businessName,onClose,initialRange}:{store:St
 function ReceiptModal({payment,data,businessName,onClose}:{payment:Payment;data:DataSet;businessName:string;onClose:()=>void}){
   const store=data.stores.find(s=>s.id===payment.store_id)!; const allocs=data.allocations.filter(a=>a.payment_id===payment.id); const rows=allocs.map(a=>({a,s:data.services.find(s=>s.id===a.service_id)})).filter(x=>x.s)
   const remaining=store?storeOpen(store.id,data):0
-  const text=`${businessName}\nComprovante de pagamento\n\nCliente: ${store?.name||'-'}\nData: ${dateBR(payment.paid_at)}\n\n${rows.map(x=>`${x.s!.device} - ${x.s!.description||'Serviço'} - ${money(x.a.amount)}`).join('\n')}\n\nTotal recebido: ${money(payment.amount)}\nSaldo atual em aberto: ${money(remaining)}`
+  const discount=paymentDiscount(payment,data)
+  const settled=+(payment.amount+discount).toFixed(2)
+  const text=`${businessName}\nComprovante de pagamento\n\nCliente: ${store?.name||'-'}\nData: ${dateBR(payment.paid_at)}\n\n${rows.map(x=>`${x.s!.device} - ${x.s!.description||'Serviço'} - ${money(x.a.amount)}`).join('\n')}\n\n${discount>0?`Total baixado antes do desconto: ${money(settled)}\nDesconto concedido: ${money(discount)}\n`:''}Total recebido: ${money(payment.amount)}\nSaldo atual em aberto: ${money(remaining)}`
   const copy=()=>navigator.clipboard.writeText(text)
   const whats=()=>window.open(`https://wa.me/${normalizePhone(store?.phone||'')}?text=${encodeURIComponent(text)}`,'_blank')
-  return <Modal title="Comprovante de pagamento" onClose={onClose}><div className="statement-preview printable"><div className="receipt-brand">{businessName}</div><b>Comprovante de pagamento</b><span>{store?.name}</span><span>{dateBR(payment.paid_at)} · {payment.method}</span>{rows.map(x=><div className="statement-line" key={x.a.id}><span>{x.s!.device}<small>{x.s!.description}</small></span><b>{money(x.a.amount)}</b></div>)}<div className="statement-total"><span>Total recebido</span><b>{money(payment.amount)}</b></div><div className="receipt-balance">Saldo atual em aberto: <b>{money(remaining)}</b></div></div><div className="share-actions"><button className="secondary" onClick={copy}><ClipboardCopy/>Copiar</button><button className="secondary" onClick={()=>window.print()}><Download/>Salvar PDF</button><button className="whatsapp" disabled={!store?.phone} onClick={whats}><MessageCircle/>WhatsApp</button></div></Modal>
+  return <Modal title="Comprovante de pagamento" onClose={onClose}><div className="statement-preview printable"><div className="receipt-brand">{businessName}</div><b>Comprovante de pagamento</b><span>{store?.name}</span><span>{dateBR(payment.paid_at)} · {payment.method}</span>{rows.map(x=><div className="statement-line" key={x.a.id}><span>{x.s!.device}<small>{x.s!.description}</small></span><b>{money(x.a.amount)}</b></div>)}<>{discount>0&&<><div className="statement-line"><span>Total baixado antes do desconto</span><b>{money(settled)}</b></div><div className="statement-line"><span>Desconto concedido</span><b>− {money(discount)}</b></div></>}</><div className="statement-total"><span>Total recebido</span><b>{money(payment.amount)}</b></div><div className="receipt-balance">Saldo atual em aberto: <b>{money(remaining)}</b></div></div><div className="share-actions"><button className="secondary" onClick={copy}><ClipboardCopy/>Copiar</button><button className="secondary" onClick={()=>window.print()}><Download/>Salvar PDF</button><button className="whatsapp" disabled={!store?.phone} onClick={whats}><MessageCircle/>WhatsApp</button></div></Modal>
 }
 
 function groupServices(list:Service[]):{key:string;device:string;description:string;amount:number;service_date:string;services:Service[]}[]{
@@ -552,5 +567,37 @@ function PeriodFilter({value,onChange}:{value:Period;onChange:(p:Period)=>void})
   return <div className="period-filter"><style>{`.period-filter{margin:0 0 20px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}.period-fields{display:flex;flex-wrap:wrap;gap:12px}.period-fields label{display:grid;gap:7px;flex:1;min-width:160px;font-size:13px;font-weight:700;color:var(--text-muted)}.period-fields input,.period-fields select{width:100%;min-width:0;padding:11px 12px;border:1px solid var(--input-border);border-radius:10px;background:var(--surface);color:var(--text)}.period-filter small{display:block;margin-top:10px;color:var(--text-muted)}.period-activity{margin-bottom:20px}.period-activity h3{margin:8px 0}.period-activity p{margin:8px 0}@media(max-width:600px){.period-fields label{min-width:100%}}`}</style><div className="period-fields"><label>Período<select value={value.mode} onChange={e=>onChange({...value,mode:e.target.value as Period['mode']})}><option value="all">Geral — todo o período</option><option value="month">Mês específico</option><option value="7">Últimos 7 dias</option><option value="15">Últimos 15 dias</option><option value="custom">Personalizado</option></select></label>{value.mode==='month'&&<label>Mês e ano<input type="month" value={value.month} onChange={e=>onChange({...value,month:e.target.value})}/></label>}{value.mode==='custom'&&<><label>De<input type="date" value={value.start} max={value.end} onChange={e=>onChange({...value,start:e.target.value})}/></label><label>Até<input type="date" value={value.end} min={value.start} onChange={e=>onChange({...value,end:e.target.value})}/></label></>}</div><small role="status">{!range.valid?'Selecione um período válido: a data final deve ser igual ou posterior à inicial.':value.mode==='all'?'Todos os registros.':`${dateBR(range.start)} a ${dateBR(range.end)} · Serviços pela data do serviço; recebimentos pela data do pagamento. Saldos em aberto são os atuais dos serviços selecionados.`}</small></div>
 }
 function PeriodActivity({services,payments,data}:{services:Service[];payments:Payment[];data:DataSet}){
-  return <div className="panel period-activity"><h3>Movimentações do período</h3><p>Serviços lançados: <b>{money(services.reduce((sum,s)=>sum+s.amount,0))}</b> · {services.length} serviço(s)</p><h3>Recebimentos</h3>{[...payments].sort((a,b)=>b.paid_at.localeCompare(a.paid_at)).map(p=><div className="statement-line" key={p.id}><span>{dateBR(p.paid_at)} · {data.stores.find(s=>s.id===p.store_id)?.name||'Lojista'}<small>{p.method}</small></span><b>{money(p.amount)}</b></div>)}{!payments.length&&<p>Nenhum recebimento no período.</p>}</div>
+  return <div className="panel period-activity"><h3>Movimentações do período</h3><p>Serviços lançados: <b>{money(services.reduce((sum,s)=>sum+s.amount,0))}</b> · {services.length} serviço(s)</p><h3>Recebimentos</h3>{[...payments].sort((a,b)=>b.paid_at.localeCompare(a.paid_at)).map(p=><div className="statement-line" key={p.id}><span>{dateBR(p.paid_at)} · {data.stores.find(s=>s.id===p.store_id)?.name||'Lojista'}<small>{p.method}{paymentDiscount(p,data)>0?` · Desconto ${money(paymentDiscount(p,data))}`:''}</small></span><b>{money(p.amount)}</b></div>)}{!payments.length&&<p>Nenhum recebimento no período.</p>}</div>
 }
+
+// A payment amount is cash received; allocations settle principal (cash + discount).
+// Keeping these distinct preserves cash reports and the original service values.
+function planSettlement(storeId:string,ids:string[],amount:number,discount:number,data:DataSet){
+  const cash=Math.round(amount*100),rebate=Math.round(discount*100)
+  if(!Number.isFinite(amount)||!Number.isFinite(discount)||cash<=0||rebate<0) throw new Error('Valor ou desconto inválido.')
+  const selected=data.services.filter(s=>ids.includes(s.id)&&s.store_id===storeId).sort((a,b)=>a.service_date.localeCompare(b.service_date)||a.id.localeCompare(b.id))
+  if(new Set(ids).size!==selected.length) throw new Error('Seleção de serviços inválida. Selecione novamente.')
+  const cap=selected.reduce((sum,s)=>sum+Math.round(serviceOutstanding(s.id,data)*100),0)
+  if(cash+rebate>cap) throw new Error('Pagamento e desconto ultrapassam o saldo selecionado.')
+  let remaining=cash+rebate
+  const allocations:{service_id:string;amount:number}[]=[]
+  for(const s of selected){const part=Math.min(Math.round(serviceOutstanding(s.id,data)*100),remaining);if(part>0)allocations.push({service_id:s.id,amount:part/100});remaining-=part}
+  return allocations
+}
+function paymentDiscount(p:Payment,data:DataSet){
+  const settled=data.allocations.filter(a=>a.payment_id===p.id).reduce((sum,a)=>sum+Math.round(a.amount*100),0)
+  return Math.max(0,settled-Math.round(p.amount*100))/100
+}
+function serviceDiscount(id:string,data:DataSet){
+  let cents=0
+  for(const p of data.payments){
+    const rebate=Math.round(paymentDiscount(p,data)*100)
+    if(!rebate)continue
+    const allocs=data.allocations.filter(a=>a.payment_id===p.id).sort((a,b)=>a.service_id.localeCompare(b.service_id)||a.id.localeCompare(b.id))
+    const total=allocs.reduce((sum,a)=>sum+Math.round(a.amount*100),0)
+    let running=0
+    for(const a of allocs){const before=Math.round(running*rebate/total);running+=Math.round(a.amount*100);if(a.service_id===id)cents+=Math.round(running*rebate/total)-before}
+  }
+  return cents/100
+}
+function duplicatePayload(s:Service){return {store_id:s.store_id,service_date:s.service_date,device:s.device,description:s.description,amount:s.amount,...(s.photo_url?{photo_url:s.photo_url}:{})}}
